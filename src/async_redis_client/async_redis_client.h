@@ -138,32 +138,42 @@ private:
             callback = std::move(other.callback);
             return *this;
         }
+
+        void Fail() noexcept {
+            (*callback)(nullptr);
+            return ;
+        }
+
+        void Success(redisReply *reply) noexcept {
+            (*callback)(reply);
+            return ;
+        }
     };
 
     struct WorkThread {
         bool started = false;
         std::thread thread;
 
-        // TODO(ppqq): 后续将锁的粒度调细一点.
+        // TODO(ppqq): 后续将锁的粒度调细一点. 这样 status 可以原子化了, 对吧.
         std::mutex mux;
         WorkThreadStatus status{WorkThreadStatus::kUnknown};
 
-        /* 若 async_handle != nullptr, 则表明 async_handle 指向着的 uv_async_t 已经被初始化, 此时对其调用
-         * uv_async_send() 不会触发 SIGSEGV.
+        /* 不变量 3: 若 async_handle != nullptr, 则表明 async_handle 指向着的 uv_async_t 已经被初始化, 此时
+         * 对其调用 uv_async_send() 不会触发 SIGSEGV.
          *
          * 其实这里可以使用读写锁, 因为 uv_async_send() 是线程安全的, 但是 uv_close(), uv_async_init() 这些
          * 并不是. 也即在执行 uv_async_send() 之前加读锁, 其他操作加写锁.
          *
          * TODO(ppqq): 读写锁.
          */
-        std::unique_ptr<uv_async_t> async_handle;
+        uv_async_t *async_handle = nullptr;
 
         /* request_vec 的内存是由 work thread 来分配.
          *
          * 对于其他线程而言, 其检测到若 request_vec 为 nullptr, 则表明对应的 work thread 不再工作, 此时不能往
          * request_vec 中加入请求. 反之, 则表明 work thread 正常工作, 此时可以压入元素.
          */
-        std::unique_ptr<std::vector<RedisRequest>> request_vec;
+        std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> request_vec;
 
     public:
         WorkThreadStatus GetStatus() noexcept {
@@ -176,7 +186,7 @@ private:
 
         void AsyncSendUnlock() noexcept {
             if (async_handle) {
-                uv_async_send(async_handle.get()); // 当 send() 失败了怎么办???
+                uv_async_send(async_handle); // 当 send() 失败了怎么办???
             }
             return ;
         }
@@ -195,7 +205,15 @@ private:
     std::vector<WorkThread> work_threads_;
 
 private:
+    ClientStatus GetStatus() noexcept {
+        return status_.load(std::memory_order_relaxed);
+    }
+
+private:
     static void WorkThreadMain(AsyncRedisClient *client, size_t idx) noexcept;
+
+    static void OnAsyncHandle(uv_async_t* handle) noexcept;
+    static void OnRedisReply(redisAsyncContext *c, void *reply, void *privdata) noexcept;
 
     static std::ostream& operator<<(std::ostream &out, ClientStatus status) {
         out << static_cast<status_t>(status);
