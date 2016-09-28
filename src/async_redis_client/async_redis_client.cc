@@ -153,8 +153,33 @@ struct WorkThreadContext {
     uv_loop_t uv_loop;
 };
 
-void OnRedisDisconnect(const struct redisAsyncContext *hiredis_async_ctx, int /* status */) noexcept {
+redisAsyncContext* GetHIRedisAsyncCtx(const char *host, int port, uv_loop_t *loop, redisDisconnectCallback *fn) noexcept {
+    redisAsyncContext *ac = redisAsyncConnect(host, port);
+    if (ac == nullptr || ac->err != 0 ||
+        redisLibuvAttach(ac, loop) != REDIS_OK ||
+        redisAsyncSetDisconnectCallback(ac, fn) != REDIS_OK) {
+        if (ac != nullptr) {
+            redisFree(ac);
+            return nullptr;
+        }
+    }
+    return ac;
+}
 
+void OnRedisDisconnect(const struct redisAsyncContext *hiredis_async_ctx, int /* status */) noexcept {
+    RedisConnectionContext *conn_ctx = (RedisConnectionContext*)hiredis_async_ctx->data;
+    WorkThreadContext *thread_ctx = conn_ctx->thread_ctx;
+
+    if (thread_ctx->no_new_request) {
+        conn_ctx->hiredis_async_ctx = nullptr;
+        return ;
+    }
+
+    conn_ctx->hiredis_async_ctx = GetHIRedisAsyncCtx(thread_ctx->client->host.c_str(),
+                                                     thread_ctx->client->port,
+                                                     &thread_ctx->uv_loop,
+                                                     OnRedisDisconnect);
+    return ;
 }
 
 /// 参见实现
@@ -252,21 +277,14 @@ void AsyncRedisClient::WorkThreadMain(AsyncRedisClient *client, size_t idx) noex
         for (size_t conn_idx = 0; conn_idx < client->conn_per_thread; ++conn_idx) {
             RedisConnectionContext *conn_ctx = &thread_ctx.conn_ctxs[conn_idx];
 
-            conn_ctx->hiredis_async_ctx = redisAsyncConnect(client->host.c_str(), client->port);
+            conn_ctx->hiredis_async_ctx = GetHIRedisAsyncCtx(client->host.c_str(), client->port,
+                                                             &thread_ctx.uv_loop, OnRedisDisconnect);
+            if (conn_ctx->hiredis_async_ctx != nullptr) {
+                conn_ctx->hiredis_async_ctx->data = conn_ctx;
 
-            if (conn_ctx->hiredis_async_ctx == nullptr || conn_ctx->hiredis_async_ctx->err != 0 ||
-                redisLibuvAttach(conn_ctx->hiredis_async_ctx, &thread_ctx.uv_loop) != REDIS_OK ||
-                redisAsyncSetDisconnectCallback(conn_ctx->hiredis_async_ctx, OnRedisDisconnect) != REDIS_OK ) {
-                if (conn_ctx->hiredis_async_ctx != nullptr) {
-                    redisAsyncFree(conn_ctx->hiredis_async_ctx);
-                    conn_ctx->hiredis_async_ctx = nullptr;
-                }
-                continue;
+                conn_ctx->idx_in_thread_ctx = conn_idx;
+                conn_ctx->thread_ctx = &thread_ctx;
             }
-            conn_ctx->hiredis_async_ctx->data = conn_ctx;
-
-            conn_ctx->idx_in_thread_ctx = conn_idx;
-            conn_ctx->thread_ctx = &thread_ctx;
         }
         ON_EXCEPTIN {
             for (RedisConnectionContext &conn_ctx : thread_ctx.conn_ctxs) {
@@ -297,8 +315,10 @@ void AsyncRedisClient::WorkThreadMain(AsyncRedisClient *client, size_t idx) noex
     return ;
 }
 
-void AsyncRedisClient::OnRedisReply(redisAsyncContext *c, void *reply, void *privdata) noexcept {
-
+void AsyncRedisClient::OnRedisReply(redisAsyncContext * /* ac */, void *reply, void *privdata) noexcept {
+    std::unique_ptr<RedisRequest> redis_request((RedisRequest*)privdata);
+    redis_request->Success((redisReply*)reply);
+    return ;
 }
 
 void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
