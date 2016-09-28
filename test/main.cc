@@ -9,6 +9,7 @@
 
 #include <common/utils.h>
 #include <common/inline_utils.h>
+#include <hiredis_util/hiredis_util.h>
 
 #include <async_redis_client/async_redis_client.h>
 
@@ -16,21 +17,19 @@ DEFINE_string(redis_host, "127.0.0.1", "redis host");
 DEFINE_int32(redis_port, 6379, "redis port");
 DEFINE_int32(work_thread_num, 4, "redis async client work thread num");
 DEFINE_int32(conn_per_thread, 3, "connection per thread");
-DEFINE_int32(test_thread_num, 10, "test thread number");
+DEFINE_int32(test_thread_num, 1, "test thread number");
 DEFINE_int32(req_per_thread, 1, "每个 test thread 发送的 redis request 数量");
 
 void OnSig(int) {
     return ;
 }
 
-std::shared_ptr<std::vector<std::string>> g_redis_cmd = std::make_shared<std::vector<std::string>>(
-    {"SET", "hello", "world"}
-);
+std::shared_ptr<std::vector<std::string>> g_redis_cmd = std::make_shared<std::vector<std::string>>();
 
 inline bool IsSuccessReply(const struct redisReply *reply) noexcept {
-    return !reply &&
-            reply->type == REDIS_REPLY_STRING &&
-            MemCompare("OK", reply->str, reply->len) == 0;
+    return  (reply &&
+            (reply->type == REDIS_REPLY_STATUS) &&
+            (MemCompare("OK", reply->str, reply->len) == 0));
 }
 
 struct OnRedisReply {
@@ -73,6 +72,7 @@ void ThreadMain() noexcept {
 int main(int argc, char **argv) noexcept {
     signal(SIGINT, OnSig);
 
+    g_redis_cmd->assign({"SET", "hello", "world"});
     google::SetUsageMessage("AsyncRedisClient Test");
     google::SetVersionString("1.0.0");
     google::ParseCommandLineFlags(&argc, &argv, false);

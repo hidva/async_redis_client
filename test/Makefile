@@ -1,11 +1,13 @@
-GCC := /home/appops/lib/gcc-5.4.0/bin/gcc
-GXX := /home/appops/lib/gcc-5.4.0/bin/g++
+GCC := gcc
+GXX := g++
 
 project_path := $(shell pwd)
 async_redis_client_project_path := $(shell cd $(project_path)/.. && pwd)
-third_path := /home/bjwangwei6/project/com/netease/recommend_system/common/third_gcc_5_4_0
-libuv_prefix := $(third_path)/libuv/1.9.1
-
+libuv_prefix := $(HOME)/lib/libuv/1.9.1
+cxx11_common_path := /home/wangwei/project/org/pp-qq/common
+glog_prefix := /usr
+gflags_prefix := /usr
+hiredis_prefix := $(HOME)/lib/hiredis/5f98e1d
 
 BIN := test
 
@@ -16,10 +18,10 @@ CXX_SRC := $(async_redis_client_project_path)/src/async_redis_client/async_redis
 CXX_SRC += $(project_path)/main.cc
 
 CXX_SRC += \
-	$(third_path)/cxx11_common/src/common/utils.cc	\
-	$(third_path)/cxx11_common/src/exception/errno_exception.cc	\
-	$(third_path)/cxx11_common/src/exception/resource_exception.cc	\
-	$(third_path)/cxx11_common/src/hiredis_util/hiredis_util.cc	
+	$(cxx11_common_path)/src/common/utils.cc	\
+	$(cxx11_common_path)/src/exception/errno_exception.cc	\
+	$(cxx11_common_path)/src/exception/resource_exception.cc	\
+	$(cxx11_common_path)/src/hiredis_util/hiredis_util.cc	
 	
 CFLAGS := 
 
@@ -27,24 +29,22 @@ CXXFLAGS := -Wall -pthread -Wno-deprecated-declarations -std=gnu++11
 CXXFLAGS += -O0 -ggdb 
 # CXXFLAGS += -O2 -DNDEBUG
 
-CXXFLAGS += -I$(third_path)/hiredis
+CXXFLAGS += -I$(hiredis_prefix)/include
 CXXFLAGS += -I$(async_redis_client_project_path)/src
 
-CXXFLAGS += -I$(third_path)/cxx11_common/src
+CXXFLAGS += -I$(cxx11_common_path)/src
 
 CXXFLAGS += 	\
-	-I$(third_path)/glog/include \
-	-I$(third_path)/gflags/include		
+	-I$(glog_prefix)/include \
+	-I$(gflags_prefix)/include		
 
 CXXFLAGS += -I$(libuv_prefix)/include
 	
 LDFLAGS := 	\
-	$(third_path)/gflags/lib/libgflags.a \
-	$(third_path)/glog/lib/libglog.a \
-	$(third_path)/hiredis/hiredis/libhiredis.a 	\
+	$(hiredis_prefix)/lib/libhiredis.a 	\
 	$(libuv_prefix)/lib/libuv.a
 
-LDFLAGS += -pthread -lrt
+LDFLAGS += -pthread -lrt -lglog -lgflags
 
 
 
