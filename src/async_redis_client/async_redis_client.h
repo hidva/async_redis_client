@@ -99,9 +99,9 @@ public:
 
     // TODO(ppqq): std::future 形式的同步接口.
 
-/* 本来这些都是 private 就行了. 
- * 
- * 但是我想重载个 operator<<(ostream &out, ClientStatus); 本来是把这个重载当作是 static member, 然后编译报错. 
+/* 本来这些都是 private 就行了.
+ *
+ * 但是我想重载个 operator<<(ostream &out, ClientStatus); 本来是把这个重载当作是 static member, 然后编译报错.
  * 貌似只能作为 non-member, 这样子的话, ClientStatus 也就必须得是 public 了.
  */
 public:
@@ -214,6 +214,15 @@ private:
 private:
     ClientStatus GetStatus() noexcept {
         return status_.load(std::memory_order_relaxed);
+    }
+
+    void JoinAllThread() noexcept {
+        for (WorkThread &work_thread : *work_threads_) {
+            if (!work_thread.started)
+                continue ;
+
+            work_thread.thread.join(); // join() 理论上不会抛出异常的.
+        }
     }
 
 private:

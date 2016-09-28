@@ -66,14 +66,7 @@ void AsyncRedisClient::DoStopOrJoin(ClientStatus op) {
         work_thread.AsyncSend();
     }
 
-    for (WorkThread &work_thread : *work_threads_) {
-        if (!work_thread.started)
-            continue ;
-
-        try {
-            work_thread.thread.join(); // join() 理论上不会抛出异常的.
-        } catch (...) {}
-    }
+    JoinAllThread();
 
     return ;
 }
