@@ -20,18 +20,18 @@ void AsyncRedisClient::Start() {
         THROW(EINVAL, "INVALID ARGUMENTS;");
     }
 
-    work_threads_.resize(thread_num);
+    work_threads_.reset(new std::vector<WorkThread>(thread_num));
     for (size_t idx = 0; idx < thread_num; ++idx) {
         try {
-            work_threads_[idx].thread = std::thread{WorkThread, this, idx};
-            work_threads_[idx].started = true;
+            (*work_threads_)[idx].thread = std::thread(WorkThreadMain, this, idx);
+            (*work_threads_)[idx].started = true;
         } catch (...) {}
     }
 
     while (true) {
         bool has_unknown_status_thread = false;
 
-        for (WorkThread &work_thread : work_threads_) {
+        for (WorkThread &work_thread : *work_threads_) {
             if (work_thread.started && work_thread.GetStatus() == WorkThreadStatus::kUnknown) {
                 has_unknown_status_thread = true;
                 break;
@@ -59,14 +59,14 @@ void AsyncRedisClient::DoStopOrJoin(ClientStatus op) {
         throw std::runtime_error(str_stream.str());
     }
 
-    for (WorkThread &work_thread : work_threads_) {
+    for (WorkThread &work_thread : *work_threads_) {
         if (!work_thread.started)
             continue;
 
         work_thread.AsyncSend();
     }
 
-    for (WorkThread &work_thread : work_threads_) {
+    for (WorkThread &work_thread : *work_threads_) {
         if (!work_thread.started)
             continue ;
 
@@ -118,7 +118,7 @@ void AsyncRedisClient::Execute(const std::shared_ptr<std::vector<std::string>> &
 
     auto sn = seq_num.fetch_add(1, std::memory_order_relaxed);
     sn %= thread_num;
-    LoopbackTraverse(work_threads_.begin(), work_threads_.end(), work_threads_.begin() + sn, AddTo);
+    LoopbackTraverse(work_threads_->begin(), work_threads_->end(), work_threads_->begin() + sn, AddTo);
 
     if (!add_success) {
         throw std::runtime_error("EXECUTE ERROR");
@@ -128,6 +128,8 @@ void AsyncRedisClient::Execute(const std::shared_ptr<std::vector<std::string>> &
 }
 
 namespace {
+
+struct WorkThreadContext;
 
 struct RedisConnectionContext {
     WorkThreadContext *thread_ctx = nullptr;
@@ -159,7 +161,7 @@ redisAsyncContext* GetHIRedisAsyncCtx(const char *host, int port, uv_loop_t *loo
         redisLibuvAttach(ac, loop) != REDIS_OK ||
         redisAsyncSetDisconnectCallback(ac, fn) != REDIS_OK) {
         if (ac != nullptr) {
-            redisFree(ac);
+            redisAsyncFree(ac);
             return nullptr;
         }
     }
@@ -186,7 +188,7 @@ void OnRedisDisconnect(const struct redisAsyncContext *hiredis_async_ctx, int /*
 uv_async_t* GetAsyncHandle(uv_loop_t *loop, uv_async_cb async_cb) noexcept {
     uv_async_t *handle = static_cast<uv_async_t*>(malloc(sizeof(uv_async_t)));
     if (handle == nullptr)
-        return ;
+        return nullptr;
 
     int uv_rc = uv_async_init(loop, handle, async_cb);
     if (uv_rc < 0) {
@@ -203,7 +205,7 @@ void OnAsyncHandleClose(uv_handle_t* handle) noexcept {
 }
 
 void CloseAsyncHandle(uv_async_t *handle) noexcept {
-    uv_close(handle, OnAsyncHandleClose);
+    uv_close((uv_handle_t*)handle, OnAsyncHandleClose);
     return ;
 }
 
@@ -218,7 +220,7 @@ void AsyncRedisClient::WorkThreadMain(AsyncRedisClient *client, size_t idx) noex
     WorkThreadContext thread_ctx;
     thread_ctx.client = client;
     thread_ctx.idx_in_client = idx;
-    WorkThread *work_thread = &client->work_threads_[idx];
+    WorkThread *work_thread = &(*client->work_threads_)[idx];
     thread_ctx.work_thread = work_thread;
 
     ON_SCOPE_EXIT(on_thread_exit_1){
@@ -332,7 +334,7 @@ void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
             int hiredis_rc = RedisAsyncCommandArgv(conn_ctx.hiredis_async_ctx, OnRedisReply,
                                                    request.get(), *request->cmd);
             if (hiredis_rc != REDIS_OK) {
-                redisFree(conn_ctx.hiredis_async_ctx);
+                redisAsyncFree(conn_ctx.hiredis_async_ctx);
                 return false;
             }
             request.release(); // 此后 RedisRequest 对象由 OnRedisReply 来负责管理.
@@ -361,14 +363,14 @@ void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
         return ;
     };
 
-    auto HandleRequests = [] (WorkThreadContext *thread_ctx, std::vector<std::unique_ptr<RedisRequest>> &requests) noexcept {
+    auto HandleRequests = [&] (WorkThreadContext *thread_ctx, std::vector<std::unique_ptr<RedisRequest>> &requests) noexcept {
         for (std::unique_ptr<RedisRequest> &request : requests) {
             HandleRequest(thread_ctx, request);
         }
         return ;
     };
 
-    auto OnRequest = [] (uv_async_t *handle) noexcept {
+    auto OnRequest = [&] (uv_async_t *handle) noexcept {
         WorkThreadContext *thread_ctx = (WorkThreadContext*)handle->data;
         WorkThread *work_thread = thread_ctx->work_thread;
         std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> request_vec;
@@ -390,7 +392,7 @@ void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
         return ;
     };
 
-    auto OnJoin = [] (uv_async_t *handle) noexcept {
+    auto OnJoin = [&] (uv_async_t *handle) noexcept {
         WorkThreadContext *thread_ctx = (WorkThreadContext*)handle->data;
         WorkThread *work_thread = thread_ctx->work_thread;
         std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> request_vec;
@@ -437,7 +439,7 @@ void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
         for (RedisConnectionContext &conn_ctx : thread_ctx->conn_ctxs) {
             if (!conn_ctx.hiredis_async_ctx)
                 continue;
-            redisFree(conn_ctx.hiredis_async_ctx);
+            redisAsyncFree(conn_ctx.hiredis_async_ctx);
         }
 
         CloseAsyncHandle(handle);

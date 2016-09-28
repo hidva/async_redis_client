@@ -6,9 +6,11 @@
 #include <string>
 #include <functional>
 #include <thread>
+#include <atomic>
 #include <mutex>
 #include <iostream>
 
+#include <hiredis/async.h>
 #include <hiredis/hiredis.h>
 #include <uv.h>
 
@@ -97,7 +99,12 @@ public:
 
     // TODO(ppqq): std::future 形式的同步接口.
 
-private:
+/* 本来这些都是 private 就行了. 
+ * 
+ * 但是我想重载个 operator<<(ostream &out, ClientStatus); 本来是把这个重载当作是 static member, 然后编译报错. 
+ * 貌似只能作为 non-member, 这样子的话, ClientStatus 也就必须得是 public 了.
+ */
+public:
     using status_t = unsigned int;
 
     enum class ClientStatus : status_t {
@@ -202,7 +209,7 @@ private:
 private:
     std::atomic<ClientStatus> status_{ClientStatus::kInitial}; // lock-free
     std::atomic_uint seq_num{0};
-    std::vector<WorkThread> work_threads_;
+    std::unique_ptr<std::vector<WorkThread>> work_threads_;
 
 private:
     ClientStatus GetStatus() noexcept {
@@ -215,11 +222,11 @@ private:
     static void OnAsyncHandle(uv_async_t* handle) noexcept;
     static void OnRedisReply(redisAsyncContext *c, void *reply, void *privdata) noexcept;
 
-    static std::ostream& operator<<(std::ostream &out, ClientStatus status) {
-        out << static_cast<status_t>(status);
-        return out;
-    }
-
     void DoStopOrJoin(ClientStatus op);
 };
+
+inline std::ostream& operator<<(std::ostream &out, AsyncRedisClient::ClientStatus status) {
+    out << static_cast<AsyncRedisClient::status_t>(status);
+    return out;
+}
 

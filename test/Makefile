@@ -1,5 +1,5 @@
-GCC := gcc
-GXX := g++
+GCC := /home/appops/lib/gcc-5.4.0/bin/gcc
+GXX := /home/appops/lib/gcc-5.4.0/bin/g++
 
 project_path := $(shell pwd)
 async_redis_client_project_path := $(shell cd $(project_path)/.. && pwd)
@@ -23,11 +23,12 @@ CXX_SRC += \
 	
 CFLAGS := 
 
-CXXFLAGS := -Wall -pthread -Wno-deprecated-declarations
+CXXFLAGS := -Wall -pthread -Wno-deprecated-declarations -std=gnu++11
 CXXFLAGS += -O0 -ggdb 
 # CXXFLAGS += -O2 -DNDEBUG
 
 CXXFLAGS += -I$(third_path)/hiredis
+CXXFLAGS += -I$(async_redis_client_project_path)/src
 
 CXXFLAGS += -I$(third_path)/cxx11_common/src
 
