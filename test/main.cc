@@ -42,8 +42,6 @@ struct OnRedisReply {
 void OnRedisReply::operator()(struct redisReply *reply) noexcept {
     clock_gettime(CLOCK_REALTIME, &on_reply_timepoint);
 
-    LOG(INFO) << "Reply: " << *reply;
-
     bool is_success_reply = IsSuccessReply(reply);
     auto thread_id = std::this_thread::get_id();
 
@@ -84,7 +82,8 @@ int main(int argc, char **argv) noexcept {
     struct timespec join_b = {0, 0};
     struct timespec join_e = {0, 0};
 
-    LOG(INFO) << "Start...";
+    std::cout << "按 CTRL+C Start..." << std::endl;
+    pause();
 
     async_redis_cli.conn_per_thread = FLAGS_conn_per_thread;
     async_redis_cli.thread_num = FLAGS_work_thread_num;
@@ -117,8 +116,8 @@ int main(int argc, char **argv) noexcept {
     async_redis_cli.Join();
     clock_gettime(CLOCK_REALTIME, &join_e);
 
-    LOG(INFO) << "Start use: " << GetTimespecDiff(start_e, start_b) << " ns, "
-              << "Join use: " << GetTimespecDiff(join_e, join_b) << " ns, ";
+    std::cout << "Start use: " << GetTimespecDiff(start_e, start_b) << " ns, "
+              << "Join use: " << GetTimespecDiff(join_e, join_b) << " ns, " << std::endl;
 
     pause();
     return 0;
