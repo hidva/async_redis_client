@@ -17,13 +17,13 @@ Execute(AsyncRedisClient::Connection conn, request, callback);
 
     ```cpp
     AsyncRedisClient g_async_redis_client;
-    
+
     int main(int argc, char **argv) {
         g_async_redis_client.conn_per_thread = FLAGS_conn_per_thread;
         g_async_redis_client.thread_num = FLAGS_work_thread_num;
         g_async_redis_client.host = FLAGS_redis_host;
         g_async_redis_client.port = FLAGS_redis_port;
-        
+
         g_async_redis_client.Start();
         // 之后就可以调用 g_async_redis_client.Execute() 来提交请求了.
     }
@@ -32,6 +32,11 @@ Execute(AsyncRedisClient::Connection conn, request, callback);
 2.  通过 `AsyncRedisClient::Execute()` 来提交请求, 具体可以参考注释.
 3.  停止 AsyncRedisClient 实例, AsyncRedisClient 提供了 `AsyncRedisClient::Join()`, `AsyncRedisClient::Stop()` 用来停止实例, 区别可以参考注释.
 
+### 安装
+
+1.  安装 libuv, 参见 libuv 手册.
+2.  安装 hiredis, 建议使用 https://github.com/pp-qq/hiredis 这个. 与原 hiredis 相比, bugfix 更勤快一点; 至于编译安装方式与原 hiredis 一致.
+3.  Ok
 
 ## DEMO
 
@@ -42,7 +47,7 @@ Execute(AsyncRedisClient::Connection conn, request, callback);
 # 启动 4 个测试线程, 每个线程发送 10000 个请求.
 $ time ./bin/test -conn_per_thread=10 -work_thread_num=2 -test_thread_num=4 -req_per_thread=10000
 按 CTRL+C Start...
-^CStart use: 4085753 ns, Join use: 373390141 ns, 
+^CStart use: 4085753 ns, Join use: 373390141 ns,
 ^C
 real	0m1.664s
 user	0m0.376s
@@ -70,5 +75,5 @@ I0929 12:51:29.670593 25705 main.cc:48] ON REDIS REPLY, 157011, 1,13966348381977
 
 ## Versioning
 
-This project follows the [semantic versioning](http://semver.org/) scheme. The API change and backwards compatibility rules are those indicated by SemVer. 
+This project follows the [semantic versioning](http://semver.org/) scheme. The API change and backwards compatibility rules are those indicated by SemVer.
 
