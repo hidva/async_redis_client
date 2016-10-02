@@ -45,12 +45,13 @@ void AsyncRedisClient::Start() {
         }
     }
 
+    SetStatus(ClientStatus::kStarted);
     return ;
 }
 
 
 void AsyncRedisClient::DoStopOrJoin(ClientStatus op) {
-    ClientStatus expect_status = ClientStatus::kInitial;
+    ClientStatus expect_status = ClientStatus::kStarted;
     bool cas_result = status_.compare_exchange_strong(expect_status, op,
         std::memory_order_relaxed, std::memory_order_relaxed);
     if (!cas_result) {
@@ -73,8 +74,8 @@ void AsyncRedisClient::DoStopOrJoin(ClientStatus op) {
 
 AsyncRedisClient::~AsyncRedisClient() noexcept {
     ClientStatus current_status = GetStatus();
-    if (current_status == ClientStatus::kInitial)
-        throw std::runtime_error("~AsyncRedisClient ERROR! current_status: kInitial");
+    if (current_status == ClientStatus::kStarted)
+        throw std::runtime_error("~AsyncRedisClient ERROR! current_status: kStarted");
 
     /* 是的, 即使 current_status 不为 kInitial, 此时析构也不是安全的.
      * 但是本来就说了, ~AsyncRedisClient() 不是线程安全的.
@@ -441,7 +442,7 @@ void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
 
     WorkThreadContext *thread_ctx = (WorkThreadContext*)handle->data;
     switch (thread_ctx->client->GetStatus(/* std::memory_order_relaxed */)) {
-    case ClientStatus::kInitial:
+    case ClientStatus::kStarted:
         OnRequest(handle);
         break;
     case ClientStatus::kStop:

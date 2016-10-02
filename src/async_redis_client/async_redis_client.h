@@ -15,21 +15,6 @@
 #include <uv.h>
 
 
-/**
- * AsyncRedisClient 异步 Redis 客户端.
- *
- * AsyncRedisClient 会启动 thread_num 个线程, 每个线程具有 conn_per_thread 个到指定 redis 实例的连接.
- * 当通过 AsyncRedisClient::Execute() 来执行请求时, AsyncRedisClient 会(通过 round-robin 算法)选择一个线程,
- * 然后将请求交给该线程来进行处理, 线程内部会(通过 round-robin 算法)选择一个连接来处理该请求, 并且得到响应之后调用指定
- * 的回调函数.
- *
- * 从上看来, AsyncRedisClient 不支持事务这类与连接相关的命令, 虽然可以提供一个重载形式的 Execute(), 如下:
- *
- *      Execute(AsyncRedisClient::Connection conn, request, callback()
- *
- * 表示着在指定的连接上执行 request. 但是通过 redis.io 得知, 事务完全可以用 lua 脚本然后在一个请求中实现. 因此就没有
- * 提供这种形式的 Execute(). (毕竟一般形式的 Execute() 能不能被很好的实现都是一会事呢 @_@).
- */
 struct AsyncRedisClient {
 
     // 调用 Start() 之后, 这些值将只读.
@@ -109,6 +94,7 @@ public:
 
     enum class ClientStatus : status_t {
         kInitial = 0,
+        kStarted,
         kStop,
         kJoin
     };
@@ -165,6 +151,7 @@ public:
 
         // TODO(ppqq): 后续将锁的粒度调细一点. 这样 status 可以原子化了, 对吧.
         std::mutex mux;
+        // TODO(ppqq): 移除该字段.
         WorkThreadStatus status{WorkThreadStatus::kUnknown};
 
         /* 不变量 3: 若 async_handle != nullptr, 则表明 async_handle 指向着的 uv_async_t 已经被初始化, 此时
@@ -216,6 +203,11 @@ private:
 private:
     ClientStatus GetStatus() noexcept {
         return status_.load(std::memory_order_relaxed);
+    }
+
+    void SetStatus(ClientStatus status) noexcept {
+        status_.store(status, std::memory_order_relaxed);
+        return ;
     }
 
     void JoinAllThread() noexcept {
