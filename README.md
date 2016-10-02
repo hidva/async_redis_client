@@ -32,6 +32,7 @@ Execute(AsyncRedisClient::Connection conn, request, callback);
 2.  通过 `AsyncRedisClient::Execute()` 来提交请求, 具体可以参考注释.
 3.  停止 AsyncRedisClient 实例, AsyncRedisClient 提供了 `AsyncRedisClient::Join()`, `AsyncRedisClient::Stop()` 用来停止实例, 区别可以参考注释.
 
+
 ## DEMO
 
 效果展示, 注: 下面的 `./bin/test` 可以通过 test 目录下的 `make` 编译得到.
@@ -66,4 +67,8 @@ I0929 12:51:29.670408 25705 main.cc:48] ON REDIS REPLY, 159135, 1,13966348381977
 I0929 12:51:29.670506 25704 main.cc:48] ON REDIS REPLY, 74546, 1,139663492212480
 I0929 12:51:29.670593 25705 main.cc:48] ON REDIS REPLY, 157011, 1,139663483819776
 ```
+
+## Versioning
+
+This project follows the [semantic versioning](http://semver.org/) scheme. The API change and backwards compatibility rules are those indicated by SemVer. 
 
