@@ -152,7 +152,9 @@ public:
         }
 
         void Success(redisReply *reply) noexcept {
-            (*callback)(reply);
+            if (callback && *callback) {
+                (*callback)(reply);
+            }
             return ;
         }
     };
