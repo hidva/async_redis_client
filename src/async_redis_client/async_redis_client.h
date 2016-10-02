@@ -1,18 +1,95 @@
 
 #pragma once
 
+#include <pthread.h>
+
 #include <memory>
 #include <vector>
 #include <string>
 #include <functional>
+#include <future>
 #include <thread>
 #include <atomic>
 #include <mutex>
 #include <iostream>
 
+#include <exception/errno_exception.h>
+
 #include <hiredis/async.h>
 #include <hiredis/hiredis.h>
 #include <uv.h>
+
+/**
+ * 利用 pthread 读写锁实现的 shared_mutex.
+ *
+ * 接口与 c++17 中待引入的 shared_mutex 保持一致.
+ */
+struct shared_mutex {
+    shared_mutex() {
+        int pthread_rc = pthread_rwlock_init(&rwlock_, nullptr);
+        if (pthread_rc != 0) {
+            THROW(pthread_rc, "pthread_rwlock_init");
+        }
+        return ;
+    }
+
+    ~shared_mutex() noexcept {
+        int pthread_rc = pthread_rwlock_destroy(&rwlock_);
+        if (pthread_rc != 0) {
+            THROW(pthread_rc, "pthread_rwlock_destroy");
+        }
+        return ;
+    }
+
+    void lock() {
+        int pthread_rc = pthread_rwlock_wrlock(&rwlock_);
+        if (pthread_rc != 0) {
+            THROW(pthread_rc, "pthread_rwlock_wrlock");
+        }
+        return ;
+    }
+
+    bool try_lock() noexcept {
+        return pthread_rwlock_trywrlock(&rwlock_) == 0;
+    }
+
+    void unlock() {
+        int pthread_rc = pthread_rwlock_unlock(&rwlock_);
+        if (pthread_rc != 0) {
+            THROW(pthread_rc, "pthread_rwlock_unlock");
+        }
+        return ;
+    }
+
+    void lock_shared() {
+        int pthread_rc = pthread_rwlock_rdlock(&rwlock_);
+        if (pthread_rc != 0) {
+            THROW(pthread_rc, "pthread_rwlock_rdlock");
+        }
+        return ;
+    }
+
+    bool try_lock_shared() noexcept {
+        return pthread_rwlock_tryrdlock(&rwlock_) == 0;
+    }
+
+    void unlock_shared() {
+        unlock();
+        return ;
+    }
+
+    // native_handle_type native_handle() = delete;
+
+private:
+    pthread_rwlock_t rwlock_;
+
+private:
+    shared_mutex(const shared_mutex &) = delete;
+    shared_mutex(shared_mutex &&) = delete;
+    shared_mutex& operator=(const shared_mutex &) = delete;
+    shared_mutex& operator=(shared_mutex &&) = delete;
+};
+
 
 
 struct AsyncRedisClient {
@@ -149,21 +226,17 @@ public:
         bool started = false;
         std::thread thread;
 
-        // TODO(ppqq): 后续将锁的粒度调细一点. 这样 status 可以原子化了, 对吧.
-        std::mutex mux;
-        // TODO(ppqq): 移除该字段.
-        WorkThreadStatus status{WorkThreadStatus::kUnknown};
-
+        shared_mutex handle_mux;
         /* 不变量 3: 若 async_handle != nullptr, 则表明 async_handle 指向着的 uv_async_t 已经被初始化, 此时
          * 对其调用 uv_async_send() 不会触发 SIGSEGV.
          *
          * 其实这里可以使用读写锁, 因为 uv_async_send() 是线程安全的, 但是 uv_close(), uv_async_init() 这些
          * 并不是. 也即在执行 uv_async_send() 之前加读锁, 其他操作加写锁.
          *
-         * TODO(ppqq): 读写锁.
          */
         uv_async_t *async_handle = nullptr;
 
+        std::mutex vec_mux;
         /* request_vec 的内存是由 work thread 来分配.
          *
          * 对于其他线程而言, 其检测到若 request_vec 为 nullptr, 则表明对应的 work thread 不再工作, 此时不能往
@@ -172,25 +245,12 @@ public:
         std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> request_vec;
 
     public:
-        WorkThreadStatus GetStatus() noexcept {
-            WorkThreadStatus s;
-            mux.lock(); // 鬼知道这里 lock() 会不会抛出异常...
-            s = status;
-            mux.unlock();
-            return s;
-        }
-
-        void AsyncSendUnlock() noexcept {
+        void AsyncSend() noexcept {
+            handle_mux.lock_shared();
             if (async_handle) {
                 uv_async_send(async_handle); // 当 send() 失败了怎么办???
             }
-            return ;
-        }
-
-        void AsyncSend() noexcept {
-            mux.lock();
-            AsyncSendUnlock();
-            mux.unlock();
+            handle_mux.unlock_shared();
             return ;
         }
     };
@@ -219,13 +279,12 @@ private:
         }
     }
 
+    void DoStopOrJoin(ClientStatus op);
 private:
-    static void WorkThreadMain(AsyncRedisClient *client, size_t idx) noexcept;
+    static void WorkThreadMain(AsyncRedisClient *client, size_t idx, std::promise<void> *p) noexcept;
 
     static void OnAsyncHandle(uv_async_t* handle) noexcept;
     static void OnRedisReply(redisAsyncContext *c, void *reply, void *privdata) noexcept;
-
-    void DoStopOrJoin(ClientStatus op);
 };
 
 inline std::ostream& operator<<(std::ostream &out, AsyncRedisClient::ClientStatus status) {
