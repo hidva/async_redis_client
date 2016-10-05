@@ -1,3 +1,7 @@
+## Versioning
+
+This project follows the [semantic versioning](http://semver.org/) scheme. The API change and backwards compatibility rules are those indicated by SemVer.
+
 
 ## 是什么
 
@@ -150,8 +154,4 @@ sys	0m1.624s
 + echo 失败请求条数: 0
 失败请求条数: 0
 ```
-
-## Versioning
-
-This project follows the [semantic versioning](http://semver.org/) scheme. The API change and backwards compatibility rules are those indicated by SemVer.
 
