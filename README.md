@@ -29,7 +29,27 @@ Execute(AsyncRedisClient::Connection conn, request, callback);
     }
     ```
 
-2.  通过 `AsyncRedisClient::Execute()` 来提交请求, 具体可以参考注释.
+2.  通过 `AsyncRedisClient::Execute()` 系列 API 来提交请求, API 语义可以参考注释. 这里提供个栗子:
+
+    ```cpp
+    void OnRedisReply(struct redisReply *reply) noexcept {
+        std::cout << *reply << std::endl;
+    }
+
+    // 待发送的请求命令.
+    std::shared_ptr<std::vector<std::string>> g_redis_cmd = std::make_shared<std::vector<std::string>>();
+    g_redis_cmd->assign({"SET", "hello", "world"});
+
+    // 异步方式.
+    g_async_redis_client.Execute(g_redis_cmd,
+        std::make_shared<AsyncRedisClient::req_callback_t>(OnRedisReply));
+
+    // 同步方式.
+    auto future_end = g_async_redis_client.Execute(g_redis_cmd);
+    auto reply = future_end.get();
+    OnRedisReply(reply.get());
+    ```
+
 3.  停止 AsyncRedisClient 实例, AsyncRedisClient 提供了 `AsyncRedisClient::Join()`, `AsyncRedisClient::Stop()` 用来停止实例, 区别可以参考注释.
 
 ### 安装
@@ -38,7 +58,7 @@ Execute(AsyncRedisClient::Connection conn, request, callback);
 2.  安装 hiredis, 建议使用 https://github.com/pp-qq/hiredis 这个. 与原 hiredis 相比, bugfix 更勤快一点; 至于编译安装方式与原 hiredis 一致.
 3.  Ok
 
-## DEMO
+## DEMO1
 
 效果展示, 注: 下面的 `./bin/test` 可以通过 test 目录下的 `make` 编译得到.
 
@@ -71,6 +91,64 @@ I0929 12:51:29.670321 25704 main.cc:48] ON REDIS REPLY, 77634, 1,139663492212480
 I0929 12:51:29.670408 25705 main.cc:48] ON REDIS REPLY, 159135, 1,139663483819776
 I0929 12:51:29.670506 25704 main.cc:48] ON REDIS REPLY, 74546, 1,139663492212480
 I0929 12:51:29.670593 25705 main.cc:48] ON REDIS REPLY, 157011, 1,139663483819776
+```
+
+## DEMO2
+
+基准测试, 比较几种 redis 请求的耗时. 代码参考 test/main.cc
+
+```shell
+wangwei|iZ25lfbcwlvZ|~/tmp/async_redis_client
+$ bash -x new_test.sh -api_kind=0 -conn_per_thread=1 -work_thread_num=1
++ ./new_test -conn_per_thread=10 -work_thread_num=2 -test_thread_num=10 -req_per_thread=10000 -api_kind=0 -conn_per_thread=1 -work_thread_num=1
+Start use: 332307 ns, Join use: 1018266672 ns,
+
+real	0m1.199s
+user	0m0.952s
+sys	0m0.056s
+++ wc -l
+++ grep 'ON REDIS REPLY,' /tmp/new_test.INFO
++ echo 总请求条数: 100000
+总请求条数: 100000
+++ wc -l
+++ grep -v ', 1,'
+++ grep 'ON REDIS REPLY,' /tmp/new_test.INFO
++ echo 失败请求条数: 0
+失败请求条数: 0
+wangwei|iZ25lfbcwlvZ|~/tmp/async_redis_client
+$ bash -x new_test.sh -api_kind=1 -conn_per_thread=1 -work_thread_num=1
++ ./new_test -conn_per_thread=10 -work_thread_num=2 -test_thread_num=10 -req_per_thread=10000 -api_kind=1 -conn_per_thread=1 -work_thread_num=1
+Start use: 370193 ns, Join use: 144057 ns,
+
+real	0m3.940s
+user	0m2.432s
+sys	0m1.104s
+++ wc -l
+++ grep 'ON REDIS REPLY,' /tmp/new_test.INFO
++ echo 总请求条数: 100000
+总请求条数: 100000
+++ wc -l
+++ grep -v ', 1,'
+++ grep 'ON REDIS REPLY,' /tmp/new_test.INFO
++ echo 失败请求条数: 0
+失败请求条数: 0
+wangwei|iZ25lfbcwlvZ|~/tmp/async_redis_client
+$ bash -x new_test.sh -api_kind=2 -conn_per_thread=1 -work_thread_num=1
++ ./new_test -conn_per_thread=10 -work_thread_num=2 -test_thread_num=10 -req_per_thread=10000 -api_kind=2 -conn_per_thread=1 -work_thread_num=1
+Start use: 324082 ns, Join use: 90844 ns,
+
+real	0m5.125s
+user	0m2.144s
+sys	0m1.624s
+++ wc -l
+++ grep 'ON REDIS REPLY,' /tmp/new_test.INFO
++ echo 总请求条数: 100000
+总请求条数: 100000
+++ wc -l
+++ grep -v ', 1,'
+++ grep 'ON REDIS REPLY,' /tmp/new_test.INFO
++ echo 失败请求条数: 0
+失败请求条数: 0
 ```
 
 ## Versioning
