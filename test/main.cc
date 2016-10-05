@@ -20,6 +20,8 @@ DEFINE_int32(conn_per_thread, 3, "connection per thread");
 DEFINE_int32(test_thread_num, 1, "test thread number");
 DEFINE_int32(req_per_thread, 1, "每个 test thread 发送的 redis request 数量");
 DEFINE_bool(pause, false, "若为真, 则会调用 pause() 在某些时候");
+DEFINE_bool(sync, true, "若为真, 则表明使用 std::future 系列的同步 API");
+
 void OnSig(int) {
     return ;
 }
@@ -53,6 +55,19 @@ void OnRedisReply::operator()(struct redisReply *reply) noexcept {
 AsyncRedisClient async_redis_cli;
 
 void ThreadMain() noexcept {
+    if (FLAGS_sync) {
+        for (int i = 0; i < FLAGS_req_per_thread; ++i) {
+            try {
+                OnRedisReply reply_callback;
+                clock_gettime(CLOCK_REALTIME, &reply_callback.commit_timepoint);
+                reply_callback(async_redis_cli.Execute(g_redis_cmd).get().get());
+            } catch (const std::exception &e) {
+                LOG(INFO) << "Execute ERROR; exception: " << e.what();
+            }
+        }
+        return ;
+    }
+
     for (int i = 0; i < FLAGS_req_per_thread; ++i) {
         OnRedisReply reply_callback;
         clock_gettime(CLOCK_REALTIME, &reply_callback.commit_timepoint);
@@ -82,7 +97,7 @@ int main(int argc, char **argv) noexcept {
     struct timespec join_b = {0, 0};
     struct timespec join_e = {0, 0};
 
-    if (FLAGS_pause) { 
+    if (FLAGS_pause) {
         std::cout << "按 CTRL+C Start..." << std::endl;
         pause();
     }
@@ -121,7 +136,7 @@ int main(int argc, char **argv) noexcept {
     std::cout << "Start use: " << GetTimespecDiff(start_e, start_b) << " ns, "
               << "Join use: " << GetTimespecDiff(join_e, join_b) << " ns, " << std::endl;
 
-    if (FLAGS_pause) { 
+    if (FLAGS_pause) {
         pause();
     }
     return 0;
