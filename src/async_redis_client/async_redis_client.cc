@@ -1,4 +1,5 @@
 #include <sstream>
+#include <new>
 
 #include <rrid/scope_exit.h>
 #include <common/utils.h>
@@ -458,3 +459,82 @@ void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
 
     return ;
 }
+
+namespace {
+
+struct PromiseCallback {
+    std::unique_ptr<std::promise<AsyncRedisClient::redisReply_unique_ptr_t>> promise_end;
+
+public:
+    PromiseCallback() noexcept = default;
+
+    PromiseCallback(PromiseCallback &&other) noexcept :
+        promise_end(std::move(other.promise_end)) {
+    }
+
+    PromiseCallback& operator=(PromiseCallback &&other) noexcept {
+        promise_end = std::move(other.promise_end);
+        return *this;
+    }
+
+    void operator()(redisReply *reply) noexcept;
+
+private:
+    PromiseCallback(const PromiseCallback &) = delete;
+    PromiseCallback& operator=(const PromiseCallback &) = delete;
+};
+
+/**
+ * 将 right 移动到 left.
+ *
+ * @note 基于 hiredis commit:360a0646bb0f7373caab08382772ca0384c1fe6d 编写. 当 hiredis 版本迭代时, 注意
+ * 调整.
+ */
+inline void MoveRedisReply(redisReply *left, redisReply *right) noexcept {
+    *left = *right;
+    right->type = REDIS_REPLY_NIL;
+    return ;
+}
+
+/**
+ * 移动 right.
+ *
+ * @return nullptr, 表明移动失败, 此时 right 不会有任何改动.
+ *  非 nullptr, 表明移动成功, 此后 right 不可再被使用, 仍然可以安全地传给 freeRedisReply() 进行释放.
+ */
+inline redisReply* MoveRedisReply(redisReply *right) noexcept {
+    redisReply *left = (redisReply*)malloc(sizeof(redisReply));
+    if (!left) {
+        return nullptr;
+    }
+    MoveRedisReply(left, right);
+    return left;
+}
+
+void PromiseCallback::operator()(redisReply *reply) noexcept {
+    if (!reply) {
+        promise_end->set_exception(std::make_exception_ptr(std::runtime_error("reply: nullptr")));
+        return ;
+    }
+
+    redisReply *reply_p = MoveRedisReply(reply);
+    if (!reply_p) {
+        promise_end->set_exception(std::make_exception_ptr(std::bad_alloc()));
+    } else {
+        promise_end->set_value(AsyncRedisClient::redisReply_unique_ptr_t(redis_p));
+    }
+    return ;
+}
+
+
+} // namespace
+
+std::future<AsyncRedisClient::redisReply_unique_ptr_t>
+AsyncRedisClient::Execute(const std::shared_ptr<std::vector<std::string>> &request) {
+    PromiseCallback cb;
+    cb.promise_end.reset(new std::promise<AsyncRedisClient::redisReply_unique_ptr_t>());
+    auto future_end = cb.promise_end->get_future();
+    Execute(request, std::make_shared<req_callback_t>(std::move(cb)));
+    return std::move(future_end);
+}
+

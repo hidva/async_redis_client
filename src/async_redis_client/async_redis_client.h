@@ -90,7 +90,12 @@ private:
     shared_mutex& operator=(shared_mutex &&) = delete;
 };
 
-
+struct RedisReplyDeleter {
+    void operator()(redisReply *reply) noexcept {
+        freeReplyObject(reply);
+        return ;
+    }
+};
 
 struct AsyncRedisClient {
 
@@ -102,6 +107,7 @@ struct AsyncRedisClient {
 
 public:
     using req_callback_t = std::function<void(redisReply *reply)/* noexcept */>;
+    using redisReply_unique_ptr_t = std::unique_ptr<redisReply, RedisReplyDeleter>;
 
 public:
     ~AsyncRedisClient() noexcept;
@@ -153,13 +159,14 @@ public:
      * callback() MUST noexcept, 若 callback() 抛出了异常, 则会直接 std::terminate().
      *
      * TODO(ppqq): 增加 host, port 参数, 表明在指定的 redis 实例上执行请求.
-     * TODO(ppqq): 增加超时参数. 当超时时, 以 nullptr reply 调用回调.
+     * TODO(ppqq): 增加超时参数. 当超时时, 以 nullptr reply 调用回调. 倒是可以通过 future.wait() 来实现超时.
      * TODO(ppqq): 移动语义.
      */
     void Execute(const std::shared_ptr<std::vector<std::string>> &request,
                  const std::shared_ptr<req_callback_t> &callback);
 
-    // TODO(ppqq): std::future 形式的同步接口.
+    std::future<redisReply_unique_ptr_t> Execute(const std::shared_ptr<std::vector<std::string>> &request);
+
 
 /* 本来这些都是 private 就行了.
  *
