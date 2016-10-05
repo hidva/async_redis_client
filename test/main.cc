@@ -27,7 +27,7 @@ DEFINE_int32(conn_per_thread, 3, "connection per thread");
 DEFINE_int32(test_thread_num, 1, "test thread number");
 DEFINE_int32(req_per_thread, 1, "每个 test thread 发送的 redis request 数量");
 DEFINE_bool(pause, false, "若为真, 则会调用 pause() 在某些时候");
-DEFINE_int(api_kind, ApiKind::kAsyncSync, "测试所使用 api 的类型;0, kAsyncAsync; 1, kAsyncSync; 2, kSync");
+DEFINE_int32(api_kind, (int)ApiKind::kAsyncSync, "测试所使用 api 的类型;0, kAsyncAsync; 1, kAsyncSync; 2, kSync");
 
 void OnSig(int) {
     return ;
@@ -53,8 +53,13 @@ void OnRedisReply::operator()(struct redisReply *reply) noexcept {
 
     bool is_success_reply = IsSuccessReply(reply);
     auto thread_id = std::this_thread::get_id();
+    const char *g_api_kind_desc[] {
+        "kAsyncAsync",
+        "kAsyncSync",
+        "kSync" 
+    };
 
-    LOG(INFO) << "ON REDIS REPLY, " << (FLAGS_sync ? "SYNC" : "ASYNC") << ", " << GetTimespecDiff(on_reply_timepoint, commit_timepoint) << ", "
+    LOG(INFO) << "ON REDIS REPLY, " << g_api_kind_desc[FLAGS_api_kind] << ", " << GetTimespecDiff(on_reply_timepoint, commit_timepoint) << ", "
               << is_success_reply << ","
               << thread_id;
 }
@@ -138,15 +143,15 @@ void SyncThreadMain() noexcept {
 
 void ThreadMain() noexcept {
     switch (FLAGS_api_kind) {
-    case ApiKind::kAsyncAsync:
+    case (int)ApiKind::kAsyncAsync:
         AsyncAsyncThreadMain();
         break;
 
-    case ApiKind::kAsyncSync:
+    case (int)ApiKind::kAsyncSync:
         AsyncSyncThreadMain();
         break;
 
-    case ApiKind::kSync:
+    case (int)ApiKind::kSync:
         SyncThreadMain();
         break;
 
