@@ -26,7 +26,8 @@ CXX_SRC += \
 CFLAGS := 
 
 CXXFLAGS := -Wall -pthread -Wno-deprecated-declarations -std=gnu++11
-CXXFLAGS += -O0 -ggdb 
+CXXFLAGS += -O0 -ggdb  -pg
+
 # CXXFLAGS += -O2 -DNDEBUG
 
 CXXFLAGS += -I$(hiredis_prefix)/include
@@ -45,7 +46,7 @@ LDFLAGS := 	\
 	$(libuv_prefix)/lib/libuv.a
 
 LDFLAGS += -pthread -lrt -lglog -lgflags
-
+LDFLAGS += -pg
 
 
 
