@@ -463,25 +463,10 @@ void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
 namespace {
 
 struct PromiseCallback {
-    std::unique_ptr<std::promise<AsyncRedisClient::redisReply_unique_ptr_t>> promise_end;
+    std::shared_ptr<std::promise<AsyncRedisClient::redisReply_unique_ptr_t>> promise_end;
 
 public:
-    PromiseCallback() noexcept = default;
-
-    PromiseCallback(PromiseCallback &&other) noexcept :
-        promise_end(std::move(other.promise_end)) {
-    }
-
-    PromiseCallback& operator=(PromiseCallback &&other) noexcept {
-        promise_end = std::move(other.promise_end);
-        return *this;
-    }
-
     void operator()(redisReply *reply) noexcept;
-
-private:
-    PromiseCallback(const PromiseCallback &) = delete;
-    PromiseCallback& operator=(const PromiseCallback &) = delete;
 };
 
 /**
@@ -521,7 +506,7 @@ void PromiseCallback::operator()(redisReply *reply) noexcept {
     if (!reply_p) {
         promise_end->set_exception(std::make_exception_ptr(std::bad_alloc()));
     } else {
-        promise_end->set_value(AsyncRedisClient::redisReply_unique_ptr_t(redis_p));
+        promise_end->set_value(AsyncRedisClient::redisReply_unique_ptr_t(reply_p));
     }
     return ;
 }
@@ -532,7 +517,7 @@ void PromiseCallback::operator()(redisReply *reply) noexcept {
 std::future<AsyncRedisClient::redisReply_unique_ptr_t>
 AsyncRedisClient::Execute(const std::shared_ptr<std::vector<std::string>> &request) {
     PromiseCallback cb;
-    cb.promise_end.reset(new std::promise<AsyncRedisClient::redisReply_unique_ptr_t>());
+    cb.promise_end = std::make_shared<std::promise<AsyncRedisClient::redisReply_unique_ptr_t>>();
     auto future_end = cb.promise_end->get_future();
     Execute(request, std::make_shared<req_callback_t>(std::move(cb)));
     return std::move(future_end);
