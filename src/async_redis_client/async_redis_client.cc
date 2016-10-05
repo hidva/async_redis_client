@@ -174,6 +174,9 @@ void OnRedisDisconnect(const struct redisAsyncContext *hiredis_async_ctx, int /*
                                                      thread_ctx->client->port,
                                                      &thread_ctx->uv_loop,
                                                      OnRedisDisconnect);
+    if (conn_ctx->hiredis_async_ctx) {
+        conn_ctx->hiredis_async_ctx->data = conn_ctx;
+    }
     return ;
 }
 
