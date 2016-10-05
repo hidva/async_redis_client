@@ -47,7 +47,7 @@ void OnRedisReply::operator()(struct redisReply *reply) noexcept {
     bool is_success_reply = IsSuccessReply(reply);
     auto thread_id = std::this_thread::get_id();
 
-    LOG(INFO) << "ON REDIS REPLY, " << GetTimespecDiff(on_reply_timepoint, commit_timepoint) << ", "
+    LOG(INFO) << "ON REDIS REPLY, " << (FLAGS_sync ? "SYNC" : "ASYNC") << ", " << GetTimespecDiff(on_reply_timepoint, commit_timepoint) << ", "
               << is_success_reply << ","
               << thread_id;
 }
