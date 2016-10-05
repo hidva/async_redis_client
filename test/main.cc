@@ -19,7 +19,7 @@ DEFINE_int32(work_thread_num, 4, "redis async client work thread num");
 DEFINE_int32(conn_per_thread, 3, "connection per thread");
 DEFINE_int32(test_thread_num, 1, "test thread number");
 DEFINE_int32(req_per_thread, 1, "每个 test thread 发送的 redis request 数量");
-
+DEFINE_bool(pause, false, "若为真, 则会调用 pause() 在某些时候");
 void OnSig(int) {
     return ;
 }
@@ -82,8 +82,10 @@ int main(int argc, char **argv) noexcept {
     struct timespec join_b = {0, 0};
     struct timespec join_e = {0, 0};
 
-    std::cout << "按 CTRL+C Start..." << std::endl;
-    pause();
+    if (FLAGS_pause) { 
+        std::cout << "按 CTRL+C Start..." << std::endl;
+        pause();
+    }
 
     async_redis_cli.conn_per_thread = FLAGS_conn_per_thread;
     async_redis_cli.thread_num = FLAGS_work_thread_num;
@@ -119,7 +121,9 @@ int main(int argc, char **argv) noexcept {
     std::cout << "Start use: " << GetTimespecDiff(start_e, start_b) << " ns, "
               << "Join use: " << GetTimespecDiff(join_e, join_b) << " ns, " << std::endl;
 
-    pause();
+    if (FLAGS_pause) { 
+        pause();
+    }
     return 0;
 }
 
