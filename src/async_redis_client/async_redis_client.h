@@ -226,17 +226,16 @@ public:
         bool started = false;
         std::thread thread;
 
-        shared_mutex handle_mux;
+        std::mutex mux;
+
         /* 不变量 3: 若 async_handle != nullptr, 则表明 async_handle 指向着的 uv_async_t 已经被初始化, 此时
          * 对其调用 uv_async_send() 不会触发 SIGSEGV.
          *
          * 其实这里可以使用读写锁, 因为 uv_async_send() 是线程安全的, 但是 uv_close(), uv_async_init() 这些
          * 并不是. 也即在执行 uv_async_send() 之前加读锁, 其他操作加写锁.
-         *
          */
         uv_async_t *async_handle = nullptr;
 
-        std::mutex vec_mux;
         /* request_vec 的内存是由 work thread 来分配.
          *
          * 对于其他线程而言, 其检测到若 request_vec 为 nullptr, 则表明对应的 work thread 不再工作, 此时不能往
@@ -246,11 +245,16 @@ public:
 
     public:
         void AsyncSend() noexcept {
-            handle_mux.lock_shared();
+            mux.lock();
+            AsyncSendUnlock();
+            mux.unlock();
+            return ;
+        }
+
+        void AsyncSendUnlock() noexcept {
             if (async_handle) {
                 uv_async_send(async_handle); // 当 send() 失败了怎么办???
             }
-            handle_mux.unlock_shared();
             return ;
         }
     };

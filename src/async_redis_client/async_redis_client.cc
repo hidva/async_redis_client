@@ -83,20 +83,18 @@ void AsyncRedisClient::Execute(const std::shared_ptr<std::vector<std::string>> &
     auto DoAddTo = [&] (WorkThread &work_thread) -> bool {
         std::unique_ptr<RedisRequest> tmp_ptr(new RedisRequest(request, callback));
 
-        {
-            work_thread.vec_mux.lock();
-            ON_SCOPE_EXIT(unlock_mux) {
-                work_thread.vec_mux.unlock();
-            };
+        work_thread.mux.lock();
+        ON_SCOPE_EXIT(unlock_mux) {
+            work_thread.mux.unlock();
+        };
 
-            if (!work_thread.request_vec) {
-                return false;
-            }
-
-            work_thread.request_vec->emplace_back(std::move(tmp_ptr));
+        if (!work_thread.request_vec) {
+            return false;
         }
 
-        work_thread.AsyncSend();
+        work_thread.request_vec->emplace_back(std::move(tmp_ptr));
+
+        work_thread.AsyncSendUnlock();
         return true;
     };
 
@@ -224,23 +222,13 @@ void AsyncRedisClient::WorkThreadMain(AsyncRedisClient *client, size_t idx, std:
     thread_ctx.work_thread = work_thread;
 
     ON_SCOPE_EXIT(on_thread_exit_1){
-#if !defined(NDEBUG)
-        {
-            work_thread->handle_mux.lock_shared();
-            if (work_thread->async_handle) {
-                work_thread->handle_mux.unlock_shared();
-                throw std::runtime_error("work_thread->async_handle != nullptr");
-            }
-            work_thread->handle_mux.unlock_shared();
-        }
-#endif
-
         // 正常情况下, 这里每一步都不应该抛出异常. 如果某个步骤抛出了异常, 那表明是(极)不正常的情况. 此时会 terminate().
         std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> request_vec;
         {
-            work_thread->vec_mux.lock();
+            work_thread->mux.lock();
             request_vec.reset(work_thread->request_vec.release()); // noexcept
-            work_thread->vec_mux.unlock();
+            work_thread->async_handle = nullptr;
+            work_thread->mux.unlock();
         }
 
         if (p) {
@@ -276,15 +264,14 @@ void AsyncRedisClient::WorkThreadMain(AsyncRedisClient *client, size_t idx, std:
 
     bool init_success = true;
     try {
-        // 所有可能会抛出异常的初始化操作都放在这里进行.
+        // 所有可能会抛出异常的初始化操作都放在这里进行. 只要确保这其中分配的资源正确释放就行了.
 
-        {
-            work_thread->vec_mux.lock();
-            ON_SCOPE_EXIT(unlock_mux) {
-                work_thread->vec_mux.unlock();
-            };
-            work_thread->request_vec.reset(new std::vector<std::unique_ptr<RedisRequest>>);
-        }
+        std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> tmp(new std::vector<std::unique_ptr<RedisRequest>>);
+        work_thread->mux.lock();
+        work_thread->request_vec = std::move(tmp);
+        work_thread->async_handle = async_handle; // noexcept
+        work_thread->mux.unlock();
+        // 以上分配的资源会由 on_thread_exit_1 进行回收.
 
         thread_ctx.conn_ctxs.resize(client->conn_per_thread);
 
@@ -316,10 +303,6 @@ void AsyncRedisClient::WorkThreadMain(AsyncRedisClient *client, size_t idx, std:
     }
 
     if (init_success) {
-        work_thread->handle_mux.lock();
-        work_thread->async_handle = async_handle; // noexcept
-        work_thread->handle_mux.unlock();
-
         SetValueOn(p);
         p = nullptr;
     } else {
@@ -393,10 +376,10 @@ void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
 
         auto *tmp = new(std::nothrow) std::vector<std::unique_ptr<RedisRequest>>;
 
-        work_thread->vec_mux.lock();
-        request_vec.reset(work_thread->request_vec.release()); // noexcept
+        work_thread->mux.lock();
+        request_vec = std::move(work_thread->request_vec); // noexcept
         work_thread->request_vec.reset(tmp); // noexcept
-        work_thread->vec_mux.unlock();
+        work_thread->mux.unlock();
 
         if (request_vec) {
             HandleRequests(thread_ctx, *request_vec);
@@ -410,13 +393,11 @@ void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
         WorkThread *work_thread = thread_ctx->work_thread;
         std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> request_vec;
 
-        work_thread->vec_mux.lock();
-        request_vec.reset(work_thread->request_vec.release());
-        work_thread->vec_mux.unlock();
-
-        work_thread->handle_mux.lock();
+        work_thread->mux.lock();
+        request_vec = std::move(work_thread->request_vec);
         work_thread->async_handle = nullptr;
-        work_thread->handle_mux.unlock();
+        work_thread->mux.unlock();
+
 
         if (request_vec) {
             HandleRequests(thread_ctx, *request_vec);
@@ -438,13 +419,10 @@ void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
         WorkThread *work_thread = thread_ctx->work_thread;
         std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> request_vec;
 
-        work_thread->vec_mux.lock();
-        request_vec.reset(work_thread->request_vec.release());
-        work_thread->vec_mux.unlock();
-
-        work_thread->handle_mux.lock();
+        work_thread->mux.lock();
+        request_vec = std::move(work_thread->request_vec);
         work_thread->async_handle = nullptr;
-        work_thread->handle_mux.unlock();
+        work_thread->mux.unlock();
 
         if (request_vec) {
             for (auto &request : *request_vec) {
