@@ -13,14 +13,21 @@
 
 #include <async_redis_client/async_redis_client.h>
 
+enum class ApiKind : int{
+    kAsyncAsync = 0,
+    kAsyncSync,
+    kSync
+};
+
 DEFINE_string(redis_host, "127.0.0.1", "redis host");
 DEFINE_int32(redis_port, 6379, "redis port");
+DEFINE_string(redis_passwd, "", "redis passwd");
 DEFINE_int32(work_thread_num, 4, "redis async client work thread num");
 DEFINE_int32(conn_per_thread, 3, "connection per thread");
 DEFINE_int32(test_thread_num, 1, "test thread number");
 DEFINE_int32(req_per_thread, 1, "每个 test thread 发送的 redis request 数量");
 DEFINE_bool(pause, false, "若为真, 则会调用 pause() 在某些时候");
-DEFINE_bool(sync, true, "若为真, 则表明使用 std::future 系列的同步 API");
+DEFINE_int(api_kind, ApiKind::kAsyncSync, "测试所使用 api 的类型;0, kAsyncAsync; 1, kAsyncSync; 2, kSync");
 
 void OnSig(int) {
     return ;
@@ -54,20 +61,7 @@ void OnRedisReply::operator()(struct redisReply *reply) noexcept {
 
 AsyncRedisClient async_redis_cli;
 
-void ThreadMain() noexcept {
-    if (FLAGS_sync) {
-        for (int i = 0; i < FLAGS_req_per_thread; ++i) {
-            try {
-                OnRedisReply reply_callback;
-                clock_gettime(CLOCK_REALTIME, &reply_callback.commit_timepoint);
-                reply_callback(async_redis_cli.Execute(g_redis_cmd).get().get());
-            } catch (const std::exception &e) {
-                LOG(INFO) << "Execute ERROR; exception: " << e.what();
-            }
-        }
-        return ;
-    }
-
+void AsyncAsyncThreadMain() noexcept {
     for (int i = 0; i < FLAGS_req_per_thread; ++i) {
         OnRedisReply reply_callback;
         clock_gettime(CLOCK_REALTIME, &reply_callback.commit_timepoint);
@@ -76,8 +70,88 @@ void ThreadMain() noexcept {
             async_redis_cli.Execute(g_redis_cmd,
                                     std::make_shared<AsyncRedisClient::req_callback_t>(reply_callback));
         } catch (const std::exception &e) {
-            LOG(INFO) << "Execute ERROR; exception: " << e.what();
+            LOG(ERROR) << "Execute ERROR; exception: " << e.what();
         }
+    }
+    return ;
+}
+
+void AsyncSyncThreadMain() noexcept {
+    for (int i = 0; i < FLAGS_req_per_thread; ++i) {
+        try {
+            OnRedisReply reply_callback;
+            clock_gettime(CLOCK_REALTIME, &reply_callback.commit_timepoint);
+            reply_callback(async_redis_cli.Execute(g_redis_cmd).get().get());
+        } catch (const std::exception &e) {
+            LOG(ERROR) << "Execute ERROR; exception: " << e.what();
+        }
+    }
+    return ;
+}
+
+namespace {
+thread_local std::unique_ptr<redisContext,void(*)(redisContext *)> redis_ctx{nullptr, redisFree};
+
+void OpenRedisContext() {
+    if (redis_ctx)
+        return ;
+
+    redis_ctx = RedisConnect(FLAGS_redis_host.c_str(), FLAGS_redis_port);
+    if (!redis_ctx || redis_ctx->err != 0) {
+        redis_ctx.reset();
+        THROW(EINVAL, "无法向 redis 建立连接; err: %s",
+              redis_ctx ? redis_ctx->errstr : "UNKNOWN");
+    }
+
+    if (!FLAGS_redis_passwd.empty())
+        RedisCommand(redis_ctx.get(), "AUTH %s", FLAGS_redis_passwd.c_str());
+
+    return ;
+}
+
+void CloseRedisContext() noexcept {
+    redis_ctx.reset();
+    return ;
+}
+
+}
+
+void SyncThreadMain() noexcept {
+    for (int i = 0; i < FLAGS_req_per_thread; ++i) {
+        try {
+            OpenRedisContext();
+            try {
+                OnRedisReply reply_callback;
+                clock_gettime(CLOCK_REALTIME, &reply_callback.commit_timepoint);
+                auto reply = RedisCommandArgv(redis_ctx.get(), *g_redis_cmd);
+                reply_callback(reply.get());
+            } catch (...) {
+                CloseRedisContext();
+                throw ;
+            }
+        } catch (const std::exception &e) {
+            LOG(ERROR) << "Execute ERROR; exception: " << e.what();
+        }
+    }
+    return ;
+}
+
+void ThreadMain() noexcept {
+    switch (FLAGS_api_kind) {
+    case ApiKind::kAsyncAsync:
+        AsyncAsyncThreadMain();
+        break;
+
+    case ApiKind::kAsyncSync:
+        AsyncSyncThreadMain();
+        break;
+
+    case ApiKind::kSync:
+        SyncThreadMain();
+        break;
+
+    default: // unreachable
+        throw std::runtime_error("WTF");
     }
     return ;
 }
