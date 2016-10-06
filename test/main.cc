@@ -184,6 +184,7 @@ int main(int argc, char **argv) noexcept {
     async_redis_cli.conn_per_thread = FLAGS_conn_per_thread;
     async_redis_cli.thread_num = FLAGS_work_thread_num;
     async_redis_cli.host = FLAGS_redis_host;
+    async_redis_cli.passwd = FLAGS_redis_passwd;
     async_redis_cli.port = FLAGS_redis_port;
 
     clock_gettime(CLOCK_REALTIME, &start_b);
