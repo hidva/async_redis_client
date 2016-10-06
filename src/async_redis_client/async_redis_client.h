@@ -102,6 +102,8 @@ struct AsyncRedisClient {
     // 调用 Start() 之后, 这些值将只读.
     std::string host;
     in_port_t port = 6379;
+    std::string passwd;
+
     size_t thread_num = 1;
     size_t conn_per_thread = 3;
 
