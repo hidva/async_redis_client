@@ -148,7 +148,9 @@ struct WorkThreadContext {
     uv_loop_t uv_loop;
 };
 
-redisAsyncContext* GetHIRedisAsyncCtx(const RedisConnectionContext *conn_ctx) noexcept {
+void OnRedisDisconnect(const struct redisAsyncContext *hiredis_async_ctx, int /* status */) noexcept;
+
+redisAsyncContext* GetHIRedisAsyncCtx(/* const */ RedisConnectionContext *conn_ctx) noexcept {
     WorkThreadContext *thread_ctx = conn_ctx->thread_ctx;
     AsyncRedisClient *client = thread_ctx->client;
 
