@@ -488,7 +488,7 @@ public:
 /**
  * 将 right 移动到 left.
  *
- * @note 基于 hiredis commit:360a0646bb0f7373caab08382772ca0384c1fe6d 编写. 当 hiredis 版本迭代时, 注意
+ * NOTE 基于 hiredis commit:360a0646bb0f7373caab08382772ca0384c1fe6d 编写. 当 hiredis 版本迭代时, 注意
  * 调整.
  */
 inline void MoveRedisReply(redisReply *left, redisReply *right) noexcept {
@@ -499,6 +499,9 @@ inline void MoveRedisReply(redisReply *left, redisReply *right) noexcept {
 
 /**
  * 移动 right.
+ *
+ * NOTE 基于 hiredis commit:360a0646bb0f7373caab08382772ca0384c1fe6d 编写. 当 hiredis 版本迭代时, 注意
+ * 调整.
  *
  * @return nullptr, 表明移动失败, 此时 right 不会有任何改动.
  *  非 nullptr, 表明移动成功, 此后 right 不可再被使用, 仍然可以安全地传给 freeRedisReply() 进行释放.
