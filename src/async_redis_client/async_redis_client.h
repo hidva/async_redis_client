@@ -13,6 +13,7 @@
 #include <mutex>
 #include <iostream>
 
+#include <concurrent/mutex.h>
 #include <exception/errno_exception.h>
 
 #include <hiredis/async.h>
@@ -166,8 +167,16 @@ public:
         bool started = false;
         std::thread thread;
 
-        std::mutex mux;
+        // NOTE: 总是先 lock vec_mux 再 lock handle_mux.
+        std::mutex vec_mux;
+        /* request_vec 的内存是由 work thread 来分配.
+         *
+         * 对于其他线程而言, 其检测到若 request_vec 为 nullptr, 则表明对应的 work thread 不再工作, 此时不能往
+         * request_vec 中加入请求. 反之, 则表明 work thread 正常工作, 此时可以压入元素.
+         */
+        std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> request_vec;
 
+        std::shared_mutex handle_mux;
         /* 不变量 3: 若 async_handle != nullptr, 则表明 async_handle 指向着的 uv_async_t 已经被初始化, 此时
          * 对其调用 uv_async_send() 不会触发 SIGSEGV.
          *
@@ -176,27 +185,24 @@ public:
          */
         uv_async_t *async_handle = nullptr;
 
-        /* request_vec 的内存是由 work thread 来分配.
-         *
-         * 对于其他线程而言, 其检测到若 request_vec 为 nullptr, 则表明对应的 work thread 不再工作, 此时不能往
-         * request_vec 中加入请求. 反之, 则表明 work thread 正常工作, 此时可以压入元素.
-         */
-        std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> request_vec;
 
     public:
         void AsyncSend() noexcept {
-            mux.lock();
-            AsyncSendUnlock();
-            mux.unlock();
-            return ;
-        }
-
-        void AsyncSendUnlock() noexcept {
+            handle_mux.lock_shared();
             if (async_handle) {
                 uv_async_send(async_handle); // 当 send() 失败了怎么办???
             }
+            handle_mux.unlock_shared();
             return ;
         }
+
+        /*
+         * 将 req 表示的请求追加到当前 work thread 中.
+         *
+         * 若抛出异常, 则表明追加失败, 此时 req 引用的对象没有任何变化. 若未抛出异常, 则根据 req
+         * 是否为空来判断请求是否成功追加, 即当为空时, 表明请求成功追加到当前 work thread 中.
+         */
+        void AddRequest(std::unique_ptr<RedisRequest> &req);
     };
 
 private:

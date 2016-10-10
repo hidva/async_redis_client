@@ -79,31 +79,43 @@ AsyncRedisClient::~AsyncRedisClient() noexcept {
     return ;
 }
 
-void AsyncRedisClient::Execute(const std::shared_ptr<std::vector<std::string>> &request,
-             const std::shared_ptr<req_callback_t> &callback) {
-    auto DoAddTo = [&] (WorkThread &work_thread) -> bool {
-        std::unique_ptr<RedisRequest> tmp_ptr(new RedisRequest(request, callback));
-
-        work_thread.mux.lock();
-        ON_SCOPE_EXIT(unlock_mux) {
-            work_thread.mux.unlock();
-        };
-
-        if (!work_thread.request_vec) {
-            return false;
-        }
-
-        work_thread.request_vec->emplace_back(std::move(tmp_ptr));
-
-        work_thread.AsyncSendUnlock();
-        return true;
+void AsyncRedisClient::WorkThread::AddRequest(std::unique_ptr<RedisRequest> &req) {
+    vec_mux.lock();
+    ON_SCOPE_EXIT(unlock_vec_mux) {
+        vec_mux.unlock();
     };
 
-    bool add_success = false;
+    if (!request_vec) {
+        return ;
+    }
+
+    request_vec->emplace_back(std::move(req));
+    return ;
+}
+
+void AsyncRedisClient::Execute(const std::shared_ptr<std::vector<std::string>> &request,
+             const std::shared_ptr<req_callback_t> &callback) {
+    /* 不变量 1:
+     * - 若 req 为空 <---> 表明 req 已经成功地交给某个 work thread 了.
+     * - 若 req 不为空 <---> 表明 req 尚未成功地交给任何一个 work thread.
+     */
+    std::unique_ptr<RedisRequest> req(new RedisRequest(request, callback));
+
+    /* 当 DoAddTo() 抛出异常的时候, 表明 req 未成功交给 work_thread, 并且 req 保持不变.
+     * 若 DoAddTo() 未抛出异常, 则符合不变量 1.
+     */
+    auto DoAddTo = [&] (WorkThread &work_thread) {
+        work_thread.AddRequest(req);
+        if (!req) {
+            work_thread.AsyncSend();
+        }
+        return ;
+    };
 
     auto AddTo = [&] (std::vector<WorkThread>::iterator iter) noexcept -> int {
         try {
-            return (add_success = DoAddTo(*iter));
+            DoAddTo(*iter);
+            return (!req);
         } catch (...) {
             return 0;
         }
@@ -113,7 +125,7 @@ void AsyncRedisClient::Execute(const std::shared_ptr<std::vector<std::string>> &
     sn %= thread_num;
     LoopbackTraverse(work_threads_->begin(), work_threads_->end(), work_threads_->begin() + sn, AddTo);
 
-    if (!add_success) {
+    if (req) {
         throw std::runtime_error("EXECUTE ERROR");
     }
 
@@ -305,10 +317,13 @@ void AsyncRedisClient::WorkThreadMain(AsyncRedisClient *client, size_t idx, std:
     }
 
     if (init_success) {
-        work_thread->mux.lock();
+        work_thread->vec_mux.lock();
         work_thread->request_vec.reset(request_vec.release());
+        work_thread->vec_mux.unlock();
+
+        work_thread->handle_mux.lock();
         work_thread->async_handle = async_handle;
-        work_thread->mux.unlock();
+        work_thread->handle_mux.unlock();
     } else {
         CloseAsyncHandle(async_handle);
     }
@@ -330,8 +345,13 @@ void AsyncRedisClient::OnRedisReply(redisAsyncContext * /* ac */, void *reply, v
 }
 
 void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
+    WorkThreadContext *thread_ctx = (WorkThreadContext*)handle->data;
+    WorkThread *work_thread = thread_ctx->work_thread;
+    std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> request_vec;
 
-    auto HandleRequest = [] (WorkThreadContext *thread_ctx, std::unique_ptr<RedisRequest> &request) noexcept {
+    auto HandleRequest = [&] (std::unique_ptr<RedisRequest> &request) noexcept {
+        bool handle_success = false;
+
         auto DoHandleRequestOn = [] (RedisConnectionContext &conn_ctx, std::unique_ptr<RedisRequest> &request) -> bool {
             if (!conn_ctx.hiredis_async_ctx) {
                 return false;
@@ -346,8 +366,6 @@ void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
             request.release(); // 此后 RedisRequest 对象由 OnRedisReply 来负责管理.
             return true;
         };
-
-        bool handle_success = false;
 
         auto HandleRequestOn = [&] (std::vector<RedisConnectionContext>::iterator iter) noexcept -> int {
             try {
@@ -369,49 +387,43 @@ void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
         return ;
     };
 
-    auto HandleRequests = [&] (WorkThreadContext *thread_ctx, std::vector<std::unique_ptr<RedisRequest>> &requests) noexcept {
-        for (std::unique_ptr<RedisRequest> &request : requests) {
-            HandleRequest(thread_ctx, request);
+    auto HandleRequests = [&] (std::vector<std::unique_ptr<RedisRequest>> &requests) noexcept {
+        for (auto &request : requests) {
+            HandleRequest(request);
         }
         return ;
     };
 
-    auto OnRequest = [&] (uv_async_t *handle) noexcept {
-        WorkThreadContext *thread_ctx = (WorkThreadContext*)handle->data;
-        WorkThread *work_thread = thread_ctx->work_thread;
-        std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> request_vec;
-
+    auto OnRequest = [&] () noexcept {
         auto *tmp = new(std::nothrow) std::vector<std::unique_ptr<RedisRequest>>;
 
-        work_thread->mux.lock();
-        request_vec = std::move(work_thread->request_vec); // noexcept
+        work_thread->vec_mux.lock();
+        request_vec.reset(work_thread->request_vec.release()); // noexcept
         work_thread->request_vec.reset(tmp); // noexcept
-        work_thread->mux.unlock();
+        work_thread->vec_mux.unlock();
 
         if (request_vec) {
-            HandleRequests(thread_ctx, *request_vec);
+            HandleRequests(*request_vec);
         }
 
         return ;
     };
 
-    auto OnJoin = [&] (uv_async_t *handle) noexcept {
-        WorkThreadContext *thread_ctx = (WorkThreadContext*)handle->data;
-        WorkThread *work_thread = thread_ctx->work_thread;
-        std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> request_vec;
+    auto OnJoin = [&] () noexcept {
+        work_thread->vec_mux.lock();
+        request_vec.reset(work_thread->request_vec.release()); // noexcept
+        work_thread->vec_mux.unlock();
 
-        work_thread->mux.lock();
-        request_vec = std::move(work_thread->request_vec);
+        work_thread->handle_mux.lock();
         work_thread->async_handle = nullptr;
-        work_thread->mux.unlock();
-
+        work_thread->handle_mux.unlock();
 
         if (request_vec) {
-            HandleRequests(thread_ctx, *request_vec);
+            HandleRequests(*request_vec);
         }
 
         thread_ctx->no_new_request = true;
-        for (RedisConnectionContext &conn_ctx : thread_ctx->conn_ctxs) {
+        for (auto &conn_ctx : thread_ctx->conn_ctxs) {
             if (!conn_ctx.hiredis_async_ctx)
                 continue;
             redisAsyncDisconnect(conn_ctx.hiredis_async_ctx);
@@ -421,15 +433,14 @@ void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
         return ;
     };
 
-    auto OnStop = [] (uv_async_t *handle) noexcept {
-        WorkThreadContext *thread_ctx = (WorkThreadContext*)handle->data;
-        WorkThread *work_thread = thread_ctx->work_thread;
-        std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> request_vec;
+    auto OnStop = [&] () noexcept {
+        work_thread->vec_mux.lock();
+        request_vec.reset(work_thread->request_vec.release()); // noexcept
+        work_thread->vec_mux.unlock();
 
-        work_thread->mux.lock();
-        request_vec = std::move(work_thread->request_vec);
+        work_thread->handle_mux.lock();
         work_thread->async_handle = nullptr;
-        work_thread->mux.unlock();
+        work_thread->handle_mux.unlock();
 
         if (request_vec) {
             for (auto &request : *request_vec) {
@@ -448,16 +459,15 @@ void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
         return ;
     };
 
-    WorkThreadContext *thread_ctx = (WorkThreadContext*)handle->data;
     switch (thread_ctx->client->GetStatus(/* std::memory_order_relaxed */)) {
     case ClientStatus::kStarted:
-        OnRequest(handle);
+        OnRequest();
         break;
     case ClientStatus::kStop:
-        OnStop(handle);
+        OnStop();
         break;
     case ClientStatus::kJoin:
-        OnJoin(handle);
+        OnJoin();
         break;
     default: // unreachable
         throw std::runtime_error("富强, 民主, 文明, 和谐, 自由, 平等, 公正, 法治, 爱国, 敬业, 诚信, 友善");
