@@ -134,7 +134,6 @@ struct RedisConnectionContext {
 
 struct WorkThreadContext {
     AsyncRedisClient *client = nullptr;
-    size_t idx_in_client;
     AsyncRedisClient::WorkThread *work_thread = nullptr;
 
     bool no_new_request = false;
@@ -181,7 +180,7 @@ redisAsyncContext* GetHIRedisAsyncCtx(/* const */ RedisConnectionContext *conn_c
     }
 
     ac->data = conn_ctx;
-    if (redisAsyncSetDisconnectCallback(ac, OnRedisDisconnect) != REDIS_OK) {
+    if (redisAsyncSetDisconnectCallback(ac, OnRedisDisconnect) != REDIS_OK) { // unreachable
         throw std::runtime_error("redisAsyncSetDisconnectCallback FAILED");
     }
     return ac;
@@ -242,30 +241,14 @@ inline void SetValueOn(std::promise<void> *p) noexcept {
 void AsyncRedisClient::WorkThreadMain(AsyncRedisClient *client, size_t idx, std::promise<void> *p) noexcept {
     WorkThreadContext thread_ctx;
     thread_ctx.client = client;
-    thread_ctx.idx_in_client = idx;
     WorkThread *work_thread = &(*client->work_threads_)[idx];
     thread_ctx.work_thread = work_thread;
 
     ON_SCOPE_EXIT(on_thread_exit_1){
-        // 正常情况下, 这里每一步都不应该抛出异常. 如果某个步骤抛出了异常, 那表明是(极)不正常的情况. 此时会 terminate().
-        std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> request_vec;
-        {
-            work_thread->mux.lock();
-            request_vec.reset(work_thread->request_vec.release()); // noexcept
-            work_thread->async_handle = nullptr;
-            work_thread->mux.unlock();
-        }
-
         if (p) {
             // 不变量 123: 若 p != nullptr, 则表明尚未对 p 调用过 set_xxx() 系列.
             SetValueOn(p);
             p = nullptr;
-        }
-
-        if (request_vec) {
-            for (std::unique_ptr<RedisRequest> &redis_request : *request_vec) {
-                redis_request->Fail();
-            }
         }
     };
 
@@ -280,23 +263,20 @@ void AsyncRedisClient::WorkThreadMain(AsyncRedisClient *client, size_t idx, std:
         }
     };
 
-    // async_handle 指向的内存是手动管理的. 注意了.
     uv_async_t *async_handle = GetAsyncHandle(&thread_ctx.uv_loop, AsyncRedisClient::OnAsyncHandle);
     if (async_handle == nullptr) {
         return ;
     }
+    // 此后 async_handle 由 uv_loop 来引用.
     async_handle->data = &thread_ctx;
 
     bool init_success = true;
+    std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> request_vec;
     try {
         // 所有可能会抛出异常的初始化操作都放在这里进行. 只要确保这其中分配的资源正确释放就行了.
 
-        std::unique_ptr<std::vector<std::unique_ptr<RedisRequest>>> tmp(new std::vector<std::unique_ptr<RedisRequest>>);
-        work_thread->mux.lock();
-        work_thread->request_vec = std::move(tmp);
-        work_thread->async_handle = async_handle; // noexcept
-        work_thread->mux.unlock();
-        // 以上分配的资源会由 on_thread_exit_1 进行回收.
+        request_vec.reset(new std::vector<std::unique_ptr<RedisRequest>>);
+        // 此时动态分配的空间与 request_vec 来负责管理, 因此不需要注册 ON_EXCEPTION.
 
         thread_ctx.conn_ctxs.resize(client->conn_per_thread);
 
@@ -308,6 +288,7 @@ void AsyncRedisClient::WorkThreadMain(AsyncRedisClient *client, size_t idx, std:
             conn_ctx->thread_ctx = &thread_ctx;
             conn_ctx->hiredis_async_ctx = GetHIRedisAsyncCtx(conn_ctx);
         }
+
 #if 0
         ON_EXCEPTIN {
             for (RedisConnectionContext &conn_ctx : thread_ctx.conn_ctxs) {
@@ -318,16 +299,22 @@ void AsyncRedisClient::WorkThreadMain(AsyncRedisClient *client, size_t idx, std:
             }
         };
 #endif
+
     } catch (...) {
         init_success = false;
     }
 
     if (init_success) {
-        SetValueOn(p);
-        p = nullptr;
+        work_thread->mux.lock();
+        work_thread->request_vec.reset(request_vec.release());
+        work_thread->async_handle = async_handle;
+        work_thread->mux.unlock();
     } else {
         CloseAsyncHandle(async_handle);
     }
+
+    SetValueOn(p);
+    p = nullptr;
 
     while (uv_run(&thread_ctx.uv_loop, UV_RUN_DEFAULT)) {
         ;
