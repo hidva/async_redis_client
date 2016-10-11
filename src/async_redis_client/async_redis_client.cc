@@ -319,7 +319,7 @@ void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
             }
 
             int hiredis_rc = RedisAsyncCommandArgv(conn_ctx.hiredis_async_ctx, OnRedisReply,
-                                                   request.get(), *request->cmd);
+                                                   request.get(), request->cmd);
             if (hiredis_rc != REDIS_OK) {
                 redisAsyncFree(conn_ctx.hiredis_async_ctx);
                 return false;
