@@ -59,5 +59,5 @@ Execute(AsyncRedisClient::Connection conn, request, callback);
 1.  C++11
 2.  [libuv, v1.9.1](https://github.com/libuv/libuv/tree/v1.9.1)
 3.  [common, v1.1.0](https://github.com/pp-qq/common/tree/v1.1.0)
-4.  [hiredis, v1.0.0](https://github.com/pp-qq/hiredis/tree/v1.0.0);
+4.  [hiredis, v1.0.1](https://github.com/pp-qq/hiredis/tree/v1.0.1);
 
