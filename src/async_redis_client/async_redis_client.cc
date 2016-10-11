@@ -93,45 +93,6 @@ void AsyncRedisClient::WorkThread::AddRequest(std::unique_ptr<RedisRequest> &req
     return ;
 }
 
-void AsyncRedisClient::Execute(const std::shared_ptr<std::vector<std::string>> &request,
-             const std::shared_ptr<req_callback_t> &callback) {
-    /* 不变量 1:
-     * - 若 req 为空 <---> 表明 req 已经成功地交给某个 work thread 了.
-     * - 若 req 不为空 <---> 表明 req 尚未成功地交给任何一个 work thread.
-     */
-    std::unique_ptr<RedisRequest> req(new RedisRequest(request, callback));
-
-    /* 当 DoAddTo() 抛出异常的时候, 表明 req 未成功交给 work_thread, 并且 req 保持不变.
-     * 若 DoAddTo() 未抛出异常, 则符合不变量 1.
-     */
-    auto DoAddTo = [&] (WorkThread &work_thread) {
-        work_thread.AddRequest(req);
-        if (!req) {
-            work_thread.AsyncSend();
-        }
-        return ;
-    };
-
-    auto AddTo = [&] (std::vector<WorkThread>::iterator iter) noexcept -> int {
-        try {
-            DoAddTo(*iter);
-            return (!req);
-        } catch (...) {
-            return 0;
-        }
-    };
-
-    unsigned int sn = seq_num.fetch_add(1, std::memory_order_relaxed);
-    sn %= thread_num;
-    LoopbackTraverse(work_threads_->begin(), work_threads_->end(), work_threads_->begin() + sn, AddTo);
-
-    if (req) {
-        throw std::runtime_error("EXECUTE ERROR");
-    }
-
-    return ;
-}
-
 namespace {
 
 struct WorkThreadContext;
@@ -478,13 +439,6 @@ void AsyncRedisClient::OnAsyncHandle(uv_async_t* handle) noexcept {
 
 namespace {
 
-struct PromiseCallback {
-    std::shared_ptr<std::promise<AsyncRedisClient::redisReply_unique_ptr_t>> promise_end;
-
-public:
-    void operator()(redisReply *reply) noexcept;
-};
-
 /**
  * 将 right 移动到 left.
  *
@@ -515,6 +469,33 @@ inline redisReply* MoveRedisReply(redisReply *right) noexcept {
     return left;
 }
 
+
+struct PromiseCallback {
+public:
+    using promise_t = std::promise<AsyncRedisClient::redisReply_unique_ptr_t>;
+
+public:
+    std::shared_ptr<promise_t> promise_end;
+
+public:
+    PromiseCallback():
+        promise_end(std::make_shared<promise_t>()) {
+    }
+
+    PromiseCallback(const PromiseCallback &) noexcept = default;
+    PromiseCallback(PromiseCallback &&other) noexcept:
+        promise_end(std::move(other.promise_end)) {
+    }
+
+    PromiseCallback& operator=(const PromiseCallback &) noexcept = default;
+    PromiseCallback& operator=(PromiseCallback &&other) noexcept {
+        promise_end = std::move(other.promise_end);
+        return *this;
+    }
+
+    void operator()(redisReply *reply) noexcept;
+};
+
 void PromiseCallback::operator()(redisReply *reply) noexcept {
     if (!reply) {
         promise_end->set_exception(std::make_exception_ptr(std::runtime_error("reply: nullptr")));
@@ -534,11 +515,57 @@ void PromiseCallback::operator()(redisReply *reply) noexcept {
 } // namespace
 
 std::future<AsyncRedisClient::redisReply_unique_ptr_t>
-AsyncRedisClient::Execute(const std::shared_ptr<std::vector<std::string>> &request) {
+AsyncRedisClient::Execute(const std::vector<std::string> &cmd) {
     PromiseCallback cb;
-    cb.promise_end = std::make_shared<std::promise<AsyncRedisClient::redisReply_unique_ptr_t>>();
     auto future_end = cb.promise_end->get_future();
-    Execute(request, std::make_shared<req_callback_t>(std::move(cb)));
+    Execute(cmd, std::move(cb));
     return std::move(future_end);
 }
+
+std::future<AsyncRedisClient::redisReply_unique_ptr_t>
+AsyncRedisClient::Execute(std::vector<std::string> &&cmd) {
+    PromiseCallback cb;
+    auto future_end = cb.promise_end->get_future();
+    Execute(std::move(cmd), std::move(cb));
+    return std::move(future_end);
+}
+
+
+void AsyncRedisClient::Execute(std::unique_ptr<RedisRequest> &req) {
+    /* 不变量 1:
+     * - 若 req 为空 <---> 表明 req 已经成功地交给某个 work thread 了.
+     * - 若 req 不为空 <---> 表明 req 尚未成功地交给任何一个 work thread.
+     */
+
+    /* 当 DoAddTo() 抛出异常的时候, 表明 req 未成功交给 work_thread, 并且 req 保持不变.
+     * 若 DoAddTo() 未抛出异常, 则符合不变量 1.
+     */
+    auto DoAddTo = [&] (WorkThread &work_thread) {
+        work_thread.AddRequest(req);
+        if (!req) {
+            work_thread.AsyncSend();
+        }
+        return ;
+    };
+
+    auto AddTo = [&] (std::vector<WorkThread>::iterator iter) noexcept -> int {
+        try {
+            DoAddTo(*iter);
+            return (!req);
+        } catch (...) {
+            return 0;
+        }
+    };
+
+    unsigned int sn = seq_num.fetch_add(1, std::memory_order_relaxed);
+    sn %= thread_num;
+    LoopbackTraverse(work_threads_->begin(), work_threads_->end(), work_threads_->begin() + sn, AddTo);
+
+    if (req) {
+        throw std::runtime_error("EXECUTE ERROR");
+    }
+
+    return ;
+}
+
 

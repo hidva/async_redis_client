@@ -94,12 +94,43 @@ public:
      *
      * TODO(ppqq): 增加 host, port 参数, 表明在指定的 redis 实例上执行请求.
      * TODO(ppqq): 增加超时参数. 当超时时, 以 nullptr reply 调用回调. 倒是可以通过 future.wait() 来实现超时.
-     * TODO(ppqq): 移动语义.
      */
-    void Execute(const std::shared_ptr<std::vector<std::string>> &request,
-                 const std::shared_ptr<req_callback_t> &callback);
+    void Execute(const std::vector<std::string> &cmd, const req_callback_t &cb) {
+        std::unique_ptr<RedisRequest> req(new RedisRequest(cmd, cb));
+        Execute(req);
+        return ;
+    }
 
-    std::future<redisReply_unique_ptr_t> Execute(const std::shared_ptr<std::vector<std::string>> &request);
+    void Execute(const std::vector<std::string> &cmd, req_callback_t &&cb) {
+        std::unique_ptr<RedisRequest> req(new RedisRequest(cmd, std::move(cb)));
+        Execute(req);
+        return ;
+    }
+
+    void Execute(std::vector<std::string> &&cmd, const req_callback_t &cb) {
+        std::unique_ptr<RedisRequest> req(new RedisRequest(std::move(cmd), cb));
+        Execute(req);
+        return ;
+    }
+
+    void Execute(std::vector<std::string> &&cmd, req_callback_t &&cb) {
+        std::unique_ptr<RedisRequest> req(new RedisRequest(std::move(cmd), std::move(cb)));
+        Execute(req);
+        return ;
+    }
+
+    void Execute(const std::shared_ptr<std::vector<std::string>> &request,
+                 const std::shared_ptr<req_callback_t> &callback) {
+        Execute(*request, *callback);
+        return ;
+    }
+
+    std::future<redisReply_unique_ptr_t> Execute(const std::shared_ptr<std::vector<std::string>> &request) {
+        return Execute(*request);
+    }
+
+    std::future<redisReply_unique_ptr_t> Execute(const std::vector<std::string> &cmd);
+    std::future<redisReply_unique_ptr_t> Execute(std::vector<std::string> &&cmd);
 
 
 /* 本来这些都是 private 就行了.
@@ -124,40 +155,55 @@ public:
     };
 
     struct RedisRequest {
-        std::shared_ptr<std::vector<std::string>> cmd;
-        std::shared_ptr<req_callback_t> callback;
+        std::vector<std::string> cmd;
+        req_callback_t callback;
 
     public:
         RedisRequest() noexcept = default;
-        RedisRequest(const RedisRequest &) noexcept = default;
 
-        // TODO(ppqq): 移动语义的构造函数;
-        RedisRequest(const std::shared_ptr<std::vector<std::string>> &cmd_arg,
-                     const std::shared_ptr<req_callback_t> &callback_arg) noexcept :
+        RedisRequest(const std::vector<std::string> &cmd_arg, const req_callback_t &callback_arg):
             cmd(cmd_arg),
             callback(callback_arg) {
         }
 
-        RedisRequest(RedisRequest &&other) noexcept :
+        RedisRequest(const std::vector<std::string> &cmd_arg, req_callback_t &&callback_arg):
+            cmd(cmd_arg),
+            callback(std::move(callback_arg)) {
+        }
+
+        RedisRequest(std::vector<std::string> &&cmd_arg, const req_callback_t &callback_arg):
+            cmd(std::move(cmd_arg)),
+            callback(callback_arg) {
+        }
+
+        RedisRequest(std::vector<std::string> &&cmd_arg, req_callback_t &&callback_arg):
+            cmd(std::move(cmd_arg)),
+            callback(std::move(callback_arg)) {
+        }
+
+        RedisRequest(const RedisRequest &) = default;
+        RedisRequest(RedisRequest &&other):
             cmd(std::move(other.cmd)),
             callback(std::move(other.callback)) {
         }
 
-        RedisRequest& operator=(const RedisRequest &) noexcept = default;
-        RedisRequest& operator=(RedisRequest &&other) noexcept {
+        RedisRequest& operator=(const RedisRequest &) = default;
+        RedisRequest& operator=(RedisRequest &&other) {
             cmd = std::move(other.cmd);
             callback = std::move(other.callback);
             return *this;
         }
 
         void Fail() noexcept {
-            (*callback)(nullptr);
+            if (callback) {
+                callback(nullptr);
+            }
             return ;
         }
 
         void Success(redisReply *reply) noexcept {
-            if (callback && *callback) {
-                (*callback)(reply);
+            if (callback) {
+                callback(reply);
             }
             return ;
         }
@@ -209,6 +255,11 @@ private:
     std::atomic<ClientStatus> status_{ClientStatus::kInitial}; // lock-free
     std::atomic_uint seq_num{0};
     std::unique_ptr<std::vector<WorkThread>> work_threads_;
+
+private:
+    /* 若成功, 则 req 指向的内存由 AsyncRedisClient 来管理. 若失败, 则抛出异常, 并且 req 保持不变.
+     */
+    void Execute(std::unique_ptr<RedisRequest> &req);
 
 private:
     ClientStatus GetStatus() noexcept {
