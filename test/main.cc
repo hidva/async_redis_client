@@ -72,8 +72,8 @@ void AsyncAsyncThreadMain() noexcept {
         clock_gettime(CLOCK_REALTIME, &reply_callback.commit_timepoint);
 
         try {
-            async_redis_cli.Execute(g_redis_cmd,
-                                    std::make_shared<AsyncRedisClient::req_callback_t>(reply_callback));
+            async_redis_cli.Execute(*g_redis_cmd,
+                                    std::move(reply_callback));
         } catch (const std::exception &e) {
             LOG(ERROR) << "Execute ERROR; exception: " << e.what();
         }
@@ -86,7 +86,7 @@ void AsyncSyncThreadMain() noexcept {
         try {
             OnRedisReply reply_callback;
             clock_gettime(CLOCK_REALTIME, &reply_callback.commit_timepoint);
-            reply_callback(async_redis_cli.Execute(g_redis_cmd).get().get());
+            reply_callback(async_redis_cli.Execute(*g_redis_cmd).get().get());
         } catch (const std::exception &e) {
             LOG(ERROR) << "Execute ERROR; exception: " << e.what();
         }
