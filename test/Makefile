@@ -7,7 +7,7 @@ libuv_prefix := $(HOME)/lib/libuv/1.9.1
 cxx11_common_path := /home/wangwei/project/org/pp-qq/common
 glog_prefix := /usr
 gflags_prefix := /usr
-hiredis_prefix := /home/wangwei/lib/pp_qq_hiredis/v1.0.0
+hiredis_prefix := /home/wangwei/lib/pp_qq_hiredis/v1.0.1
 timer_prefix := /home/wangwei/project/org/pp-qq/timer
 
 BIN := test
