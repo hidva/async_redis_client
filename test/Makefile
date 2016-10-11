@@ -7,7 +7,8 @@ libuv_prefix := $(HOME)/lib/libuv/1.9.1
 cxx11_common_path := /home/wangwei/project/org/pp-qq/common
 glog_prefix := /usr
 gflags_prefix := /usr
-hiredis_prefix := $(HOME)/lib/hiredis/5f98e1d
+hiredis_prefix := /home/wangwei/lib/pp_qq_hiredis/v1.0.0
+timer_prefix := /home/wangwei/project/org/pp-qq/timer
 
 BIN := test
 
@@ -15,13 +16,16 @@ C_SRC :=
 
 CXX_SRC := $(async_redis_client_project_path)/src/async_redis_client/async_redis_client.cc	
 
-CXX_SRC += $(project_path)/example_1.cc
+CXX_SRC += $(project_path)/example_2.cc
 
 CXX_SRC += \
 	$(cxx11_common_path)/src/common/utils.cc	\
 	$(cxx11_common_path)/src/exception/errno_exception.cc	\
 	$(cxx11_common_path)/src/exception/resource_exception.cc	\
 	$(cxx11_common_path)/src/hiredis_util/hiredis_util.cc	
+
+CXX_SRC += \
+	$(timer_prefix)/src/libuv_timer/timer_manager.cc
 	
 CFLAGS := 
 
@@ -32,6 +36,7 @@ CXXFLAGS += -O0 -ggdb
 
 CXXFLAGS += -I$(hiredis_prefix)/include
 CXXFLAGS += -I$(async_redis_client_project_path)/src
+CXXFLAGS += -I$(timer_prefix)/src
 
 CXXFLAGS += -I$(cxx11_common_path)/src
 
