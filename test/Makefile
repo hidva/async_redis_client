@@ -15,7 +15,7 @@ C_SRC :=
 
 CXX_SRC := $(async_redis_client_project_path)/src/async_redis_client/async_redis_client.cc	
 
-CXX_SRC += $(project_path)/main.cc
+CXX_SRC += $(project_path)/example_1.cc
 
 CXX_SRC += \
 	$(cxx11_common_path)/src/common/utils.cc	\
